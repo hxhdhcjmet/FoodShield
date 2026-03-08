@@ -14,3 +14,8 @@ def generate_hash(data : str)->str:
 if __name__ == "__main__":
     data = "hello world"
     print(generate_hash(data))
+
+
+
+
+    
