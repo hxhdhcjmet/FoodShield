@@ -13,7 +13,18 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "FoodShield Server Running"
+    return """
+    <h1>FoodShield Server Running</h1>
+    <p>Available test routes:</p>
+    <ul>
+        <li><a href="/get_order?order_id=123">GET /get_order?order_id=123</a></li>
+    </ul>
+    <p>POST routes:</p>
+    <ul>
+        <li>/register</li>
+        <li>/create_order</li>
+    </ul>
+    """
 
 
 @app.route("/register", methods=["POST"])
@@ -61,7 +72,6 @@ def create_order():
         "msg": "order created",
         "order_id": order_id
     })
-
 
 @app.route("/get_order", methods=["GET"])
 def get_order():
