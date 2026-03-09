@@ -1,19 +1,35 @@
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT,
-    pid TEXT
+    username TEXT NOT NULL UNIQUE,
+    pid TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_id TEXT,
-    user_id INTEGER,
-    token TEXT
+    order_id TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
+    token TEXT,
+    status TEXT DEFAULT 'created',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
-CREATE TABLE messages (
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    content TEXT NOT NULL,
+    message_hash TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (order_id) REFERENCES orders(order_id)
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     order_id TEXT,
-    sender TEXT,
-    content TEXT
+    action TEXT NOT NULL,
+    detail TEXT,
+    merkle_root TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

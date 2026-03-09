@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from project.database.db import init_db
 
 app = Flask(__name__)
 
@@ -84,4 +85,5 @@ def get_order():
 
 
 if __name__ == "__main__":
+    init_db()
     app.run(debug=True)
