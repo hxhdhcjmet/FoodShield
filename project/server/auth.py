@@ -1,4 +1,4 @@
-from project.server.token_utils import verify_token
+from project.crypto.token_utils import verify_token
 
 class OrderAuthService:
     """
