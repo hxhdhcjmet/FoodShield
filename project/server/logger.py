@@ -1,6 +1,6 @@
 # 消息记录模块
 import time
-from project.crypto.merkle import hash_message
+from project.crypto.merkle import hash_message,MerkleTree
 
 class CommunicationLogger:
     """
@@ -8,7 +8,8 @@ class CommunicationLogger:
     负责接收聊天信息,计算其Hash,并储存到内存中的日志结构里
     """
     def __init__(self):
-        self.chat_logs = {}
+        self.chat_logs = {} # 存储聊天记录
+        self.audit_roots = {}# 存储已认证的Merkle Root
 
         # 初步使用字典储存,方便后续转数据库,直接一步到数据库需要与后端频繁对接,降低开发效率
         # key:order_id,value:该订单下的所有聊天记录列表
@@ -48,6 +49,34 @@ class CommunicationLogger:
         """
         return self.chat_logs.get(order_id,[])
     
+    def seal_and_save_root(self,order_id : str)->str:
+        """
+        生成并封装Merkle Root(存证)
+        """
+        logs = self.chat_logs.get(order_id,[])
+        hashes = [log['msg_hash'] for log in logs]
+
+        tree = MerkleTree(hashes)
+        root = tree.get_root()
+        self.audit_roots[order_id] = root
+        return root
+    
+    def verify_integrity(self,order_id : str)->tuple:
+        """
+        验证日志完整性:重新计算当前日志的Root并与存证对比
+        """
+        saved_root = self.audit_roots.get(order_id)
+        if not saved_root:
+            return False,"未找到存证记录"
+        
+        current_root = MerkleTree([l['msg_hash'] for l in self.chat_logs[order_id]]).get_root()
+
+        if current_root == saved_root:
+            return True,"验证通过:日志完整"
+        else:
+            return False,"警告:检测到日志篡改"
+        
+    
 if __name__ == "__main__":
     logger = CommunicationLogger()
 
@@ -63,15 +92,24 @@ if __name__ == "__main__":
     print("用户回复信息")
     user_msg = logger.record_chat_message(order_id,user_id,"收到,马上去取")
 
-    print('+'*30,"打印储存在系统的信息",'+'*30)
-    all_logs = logger.get_logs_by_order(order_id)
+    root = logger.seal_and_save_root(order_id)
+    print(f"原始merkle root:{root}")
 
-    for idx,log in enumerate(all_logs):
-        print(f"第{idx+1}条信息记录")
-        print(f"发送方PID:{log['sender_pid']}")
-        print(f"明文信息:{log['content']}")
-        print(f"时间戳:{log['timestamp']}")
-        print(f"完整Hash凭证:{log['msg_hash']}")
+    # 模拟完整性校验
+    success,msg = logger.verify_integrity(order_id)
+    print(f"初次审计结果:{success},信息:{msg}")
+
+    # 模拟攻击
+    print("模拟黑客攻击...")
+    logger.chat_logs[order_id][0]['content'] = "我把外卖偷走了"
+    l = logger.chat_logs[order_id][0]
+    logger.chat_logs[order_id][0]['msg_hash'] = hash_message(order_id,l['sender_pid'],l['content'],l['timestamp'])
+
+    # 再次进行merkle审计
+    success,msg = logger.verify_integrity(order_id)
+    print(f'篡改后审计结果:{success},信息:{msg}')
+
+
 
 
 
