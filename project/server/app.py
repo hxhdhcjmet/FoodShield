@@ -1,8 +1,9 @@
 from flask import Flask, request, jsonify
 from project.database.db import init_db, execute, query_one
 from project.crypto.pid import generate_pid
-
+from project.crypto.token_utils import generate_token,verify_token
 import uuid
+
 
 
 app = Flask(__name__)
@@ -24,8 +25,6 @@ def home():
     """
 
 
-from project.database.db import query_one
-
 @app.route("/register", methods=["POST"])
 def register():
     data = request.json
@@ -40,8 +39,10 @@ def register():
         (username,)
     )
     if existing:
-        return jsonify({"error": "username already exists"}), 400
-
+        return jsonify({
+            "success": False,
+            "message": "username already exists"
+        }), 400
     temp_pid = f"temp_{uuid.uuid4()}"
 
     try:
@@ -63,53 +64,109 @@ def register():
         )
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
 
     return jsonify({
-        "msg": "register success",
+    "success": True,
+    "message": "user registered successfully",
+    "data": {
         "user_id": user_id,
         "username": username,
         "pid": pid,
         "r": r
-    })
+        }
+    }), 201
 
 
-
-@app.route("/create_order", methods=["POST"])
 @app.route("/create_order", methods=["POST"])
 def create_order():
     data = request.json
 
-    if not data or "user_id" not in data:
-        return jsonify({"error": "user_id is required"}), 400
+    if not data or "pid" not in data:
+        return jsonify({
+            "success": False,
+            "message": "pid is required"
+        }), 400
 
-    user_id = data["user_id"]
+    pid = data["pid"]
 
     user = query_one(
-        "SELECT * FROM users WHERE id = ?",
-        (user_id,)
+        "SELECT * FROM users WHERE pid = ?",
+        (pid,)
     )
 
     if not user:
-        return jsonify({"error": "user not found"}), 404
+        return jsonify({
+            "success": False,
+            "message": "user not found"
+        }), 404
 
+    user_id = user["id"]
     order_id = str(uuid.uuid4())
+
+    token_data = generate_token(order_id, pid)
+    token = token_data["token"]
+    timestamp = token_data["timestamp"]
 
     try:
         execute(
-            "INSERT INTO orders (order_id, user_id, token, status) VALUES (?, ?, ?, ?)",
-            (order_id, user_id, "temp_token", "created")
+            "INSERT INTO orders (order_id, user_id, token, token_timestamp, status) VALUES (?, ?, ?, ?, ?)",
+            (order_id, user_id, token, timestamp, "created")
         )
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
 
     return jsonify({
-        "msg": "order created",
+        "success": True,
+        "message": "order created successfully",
+        "data": {
+            "order_id": order_id,
+            "pid": pid,
+            "token": token,
+            "timestamp": timestamp,
+            "status": "created"
+        }
+    }), 201
+    
+    
+
+
+@app.route("/verify_order", methods=["POST"])
+def verify_order_api():
+    data = request.json
+
+    required_fields = ["order_id", "pid", "timestamp", "token"]
+    for field in required_fields:
+        if not data or field not in data:
+            return jsonify({
+                "success": False,
+                "message": f"{field} is required"
+            }), 400     
+
+    order_id = data["order_id"]
+    pid = data["pid"]
+    timestamp = data["timestamp"]
+    provided_token = data["token"]
+
+    is_valid = verify_token(order_id, pid, timestamp, provided_token)
+
+    return jsonify({
+    "success": True,
+    "message": "order verification completed",
+    "data": {
         "order_id": order_id,
-        "user_id": user_id,
-        "token": "temp_token",
-        "status": "created"
-    })
+        "pid": pid,
+        "valid": is_valid
+        }
+    }), 200   
+
+
 
 
 @app.route("/get_order", methods=["GET"])
