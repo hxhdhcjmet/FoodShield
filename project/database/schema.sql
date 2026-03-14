@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS orders (
     order_id TEXT NOT NULL UNIQUE,
     user_id INTEGER NOT NULL,
     token TEXT,
+    token_timestamp TEXT,
     status TEXT DEFAULT 'created',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id)
