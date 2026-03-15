@@ -2,62 +2,446 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>用户端 - 匿名外卖</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="css/style.css" rel="stylesheet">
+    <link href="/css/style.css" rel="stylesheet">
+    <style>
+        body {
+            background: #f5f7fb;
+        }
+        .navbar {
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+        .page-title {
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+        .step-card {
+            border: none;
+            border-radius: 18px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+            height: 100%;
+        }
+        .step-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+        .result-box {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 12px;
+            padding: 12px;
+            min-height: 56px;
+            word-break: break-all;
+        }
+        .kv-row {
+            padding: 10px 0;
+            border-bottom: 1px dashed #dee2e6;
+        }
+        .kv-row:last-child {
+            border-bottom: none;
+        }
+        .kv-key {
+            font-weight: 600;
+            color: #495057;
+            margin-bottom: 4px;
+        }
+        .kv-value {
+            color: #212529;
+            word-break: break-all;
+        }
+        .badge-status {
+            font-size: 0.95rem;
+            padding: 0.5em 0.8em;
+        }
+        .btn-copy {
+            font-size: 0.85rem;
+        }
+        .section-tip {
+            font-size: 0.92rem;
+            color: #6c757d;
+        }
+        .verify-pass {
+            color: #198754;
+            font-weight: 700;
+        }
+        .verify-fail {
+            color: #dc3545;
+            font-weight: 700;
+        }
+    </style>
 </head>
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
     <div class="container">
-        <a class="navbar-brand" href="#">🍔 匿名外卖</a>
+        <a class="navbar-brand fw-bold" href="/">🍔 匿名外卖</a>
         <div class="navbar-nav ms-auto">
-            <a class="nav-link" href="#">登录</a>
-            <a class="nav-link" href="#">我的订单</a>
-            <a class="nav-link active" href="#">订单通信</a>
+            <a class="nav-link active" href="/user.html">用户端</a>
+            <a class="nav-link" href="/rider.html">骑手端</a>
+            <a class="nav-link" href="/admin.html">管理员端</a>
         </div>
     </div>
 </nav>
 
-<div class="container mt-4">
-    <div class="row">
-        <!-- 左侧：订单认证 -->
-        <div class="col-md-5">
-            <div class="card p-4">
-                <h4 class="card-title text-primary">订单认证入口</h4>
+<div class="container py-4">
+    <div class="mb-4">
+        <h2 class="page-title">用户端 · 匿名订单认证流程演示</h2>
+        <div class="text-muted">按顺序完成：注册 → 创建订单 → 验证订单认证信息</div>
+    </div>
+
+    <div id="alertBox"></div>
+
+    <div class="row g-4">
+        <!-- 1 注册 -->
+        <div class="col-lg-4">
+            <div class="card step-card p-4">
+                <div class="step-title text-primary mb-2">1. 用户注册</div>
+                <div class="section-tip mb-3">输入用户名，生成匿名身份 PID。</div>
+
                 <div class="mb-3">
-                    <label>订单号</label>
-                    <input type="text" class="form-control" value="ORDER20250313001" readonly>
+                    <label for="username" class="form-label">用户名</label>
+                    <input id="username" type="text" class="form-control" placeholder="例如：wjy">
                 </div>
-                <div class="mb-3">
-                    <label>认证Token（模拟）</label>
-                    <input type="text" class="form-control" value="tk_8f3k9x2m" readonly>
+
+                <div class="d-grid mb-3">
+                    <button id="registerBtn" class="btn btn-primary btn-lg" onclick="handleRegister()">注册</button>
                 </div>
-                <button onclick="alert('✅ 认证通过！进入匿名聊天通道')" class="btn btn-primary w-100">
-                    提交认证 → 进入聊天
-                </button>
-                <small class="text-success d-block mt-2 text-center">PID: p_7a9b2c4d（已匿名）</small>
+
+                <div class="kv-row">
+                    <div class="kv-key">当前 PID</div>
+                    <div id="pidBox" class="result-box">尚未生成</div>
+                    <div class="mt-2">
+                        <button class="btn btn-outline-secondary btn-sm btn-copy" onclick="copyText('pidBox')">复制 PID</button>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- 右侧：聊天预览 -->
-        <div class="col-md-7">
-            <div class="card">
-                <div class="card-header bg-primary text-white">匿名聊天通道（与骑手）</div>
-                <div class="chat-preview p-3">
-                    <div class="text-end"><span class="badge bg-success">骑手</span> 您的外卖已到楼下</div>
-                    <div class="text-start mt-2"><span class="badge bg-primary">我</span> 好的，谢谢！</div>
+        <!-- 2 创建订单 -->
+        <div class="col-lg-4">
+            <div class="card step-card p-4">
+                <div class="step-title text-success mb-2">2. 创建订单</div>
+                <div class="section-tip mb-3">输入或自动填充 PID，创建订单并生成 token。</div>
+
+                <div class="mb-3">
+                    <label for="pidInput" class="form-label">当前 PID</label>
+                    <input id="pidInput" type="text" class="form-control" placeholder="注册后会自动填充">
                 </div>
-                <div class="card-footer">
-                    <div class="input-group">
-                        <input type="text" class="form-control" placeholder="输入消息...">
-                        <button class="btn btn-primary">发送</button>
+
+                <div class="d-grid mb-3">
+                    <button id="createBtn" class="btn btn-success btn-lg" onclick="handleCreateOrder()">创建订单</button>
+                </div>
+
+                <div class="kv-row">
+                    <div class="kv-key">订单号</div>
+                    <div id="orderIdBox" class="result-box">尚未生成</div>
+                </div>
+
+                <div class="kv-row">
+                    <div class="kv-key">时间戳</div>
+                    <div id="timestampBox" class="result-box">尚未生成</div>
+                </div>
+
+                <div class="kv-row">
+                    <div class="kv-key">Token</div>
+                    <div id="tokenBox" class="result-box">尚未生成</div>
+                    <div class="mt-2 d-flex gap-2 flex-wrap">
+                        <button class="btn btn-outline-secondary btn-sm btn-copy" onclick="copyText('orderIdBox')">复制订单号</button>
+                        <button class="btn btn-outline-secondary btn-sm btn-copy" onclick="copyText('tokenBox')">复制 Token</button>
                     </div>
+                </div>
+
+                <div class="kv-row">
+                    <div class="kv-key">订单状态</div>
+                    <div>
+                        <span id="statusBadge" class="badge text-bg-secondary badge-status">未创建</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3 验证订单 -->
+        <div class="col-lg-4">
+            <div class="card step-card p-4">
+                <div class="step-title text-dark mb-2">3. 验证订单</div>
+                <div class="section-tip mb-3">自动读取订单认证信息，校验 token 是否有效。</div>
+
+                <div class="mb-2">
+                    <label class="form-label">订单号</label>
+                    <input id="verifyOrderId" type="text" class="form-control" readonly>
+                </div>
+
+                <div class="mb-2">
+                    <label class="form-label">PID</label>
+                    <input id="verifyPid" type="text" class="form-control" readonly>
+                </div>
+
+                <div class="mb-2">
+                    <label class="form-label">时间戳</label>
+                    <input id="verifyTimestamp" type="text" class="form-control" readonly>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Token</label>
+                    <textarea id="verifyToken" class="form-control" rows="3" readonly></textarea>
+                </div>
+
+                <div class="d-grid mb-3">
+                    <button id="verifyBtn" class="btn btn-dark btn-lg" onclick="handleVerifyOrder()">验证订单认证信息</button>
+                </div>
+
+                <div class="kv-row">
+                    <div class="kv-key">验证结果</div>
+                    <div id="verifyResult" class="result-box">尚未验证</div>
+                </div>
+
+                <div class="mt-3 d-grid">
+                    <button class="btn btn-outline-danger" onclick="handleFakeVerify()">模拟篡改 Token 后验证</button>
                 </div>
             </div>
         </div>
     </div>
 </div>
+
+<script>
+const BASE_URL = "http://127.0.0.1:5000";
+
+function showAlert(type, message) {
+    const alertBox = document.getElementById("alertBox");
+    alertBox.innerHTML = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    `;
+}
+
+function setButtonLoading(buttonId, loadingText, isLoading) {
+    const btn = document.getElementById(buttonId);
+    if (!btn) return;
+    if (isLoading) {
+        btn.dataset.oldText = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = loadingText;
+    } else {
+        btn.disabled = false;
+        btn.innerHTML = btn.dataset.oldText || btn.innerHTML;
+    }
+}
+
+function copyText(elementId) {
+    const text = document.getElementById(elementId).innerText.trim();
+    if (!text || text === "尚未生成") {
+        showAlert("warning", "当前没有可复制的内容。");
+        return;
+    }
+    navigator.clipboard.writeText(text)
+        .then(() => showAlert("success", "复制成功。"))
+        .catch(() => showAlert("danger", "复制失败，请手动复制。"));
+}
+
+function fillVerifyFields(order_id, pid, timestamp, token) {
+    document.getElementById("verifyOrderId").value = order_id || "";
+    document.getElementById("verifyPid").value = pid || "";
+    document.getElementById("verifyTimestamp").value = timestamp || "";
+    document.getElementById("verifyToken").value = token || "";
+}
+
+function saveOrderData(data) {
+    localStorage.setItem("pid", data.pid);
+    localStorage.setItem("order_id", data.order_id);
+    localStorage.setItem("timestamp", data.timestamp);
+    localStorage.setItem("token", data.token);
+}
+
+function loadLocalData() {
+    const pid = localStorage.getItem("pid") || "";
+    const order_id = localStorage.getItem("order_id") || "";
+    const timestamp = localStorage.getItem("timestamp") || "";
+    const token = localStorage.getItem("token") || "";
+
+    if (pid) {
+        document.getElementById("pidBox").innerText = pid;
+        document.getElementById("pidInput").value = pid;
+    }
+    fillVerifyFields(order_id, pid, timestamp, token);
+
+    if (order_id) document.getElementById("orderIdBox").innerText = order_id;
+    if (timestamp) document.getElementById("timestampBox").innerText = timestamp;
+    if (token) document.getElementById("tokenBox").innerText = token;
+
+    const savedStatus = localStorage.getItem("status");
+    if (savedStatus) {
+        updateStatusBadge(savedStatus);
+    }
+}
+
+function updateStatusBadge(status) {
+    const badge = document.getElementById("statusBadge");
+    badge.innerText = status || "未知";
+    badge.className = "badge badge-status";
+    if (status === "created") {
+        badge.classList.add("text-bg-success");
+    } else {
+        badge.classList.add("text-bg-secondary");
+    }
+    localStorage.setItem("status", status || "");
+}
+
+async function handleRegister() {
+    const username = document.getElementById("username").value.trim();
+    if (!username) {
+        showAlert("warning", "请输入用户名。");
+        return;
+    }
+
+    setButtonLoading("registerBtn", "注册中...", true);
+
+    try {
+        const res = await fetch(`${BASE_URL}/register`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ username })
+        });
+
+        const result = await res.json();
+
+        if (result.success) {
+            const pid = result.data.pid;
+            document.getElementById("pidBox").innerText = pid;
+            document.getElementById("pidInput").value = pid;
+            localStorage.setItem("pid", pid);
+            showAlert("success", "注册成功，已生成匿名 PID。");
+        } else {
+            showAlert("danger", result.message || "注册失败。");
+        }
+    } catch (error) {
+        showAlert("danger", "请求失败，请检查后端是否启动。");
+    } finally {
+        setButtonLoading("registerBtn", "注册中...", false);
+    }
+}
+
+async function handleCreateOrder() {
+    const pid = document.getElementById("pidInput").value.trim() || localStorage.getItem("pid");
+    if (!pid) {
+        showAlert("warning", "请先注册或输入 PID。");
+        return;
+    }
+
+    setButtonLoading("createBtn", "创建中...", true);
+
+    try {
+        const res = await fetch(`${BASE_URL}/create_order`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ pid })
+        });
+
+        const result = await res.json();
+
+        if (result.success) {
+            const data = result.data;
+
+            document.getElementById("orderIdBox").innerText = data.order_id;
+            document.getElementById("timestampBox").innerText = data.timestamp;
+            document.getElementById("tokenBox").innerText = data.token;
+            document.getElementById("pidBox").innerText = data.pid;
+            document.getElementById("pidInput").value = data.pid;
+
+            updateStatusBadge(data.status);
+            saveOrderData(data);
+            fillVerifyFields(data.order_id, data.pid, data.timestamp, data.token);
+
+            showAlert("success", "订单创建成功，认证信息已生成。");
+        } else {
+            showAlert("danger", result.message || "创建订单失败。");
+        }
+    } catch (error) {
+        showAlert("danger", "请求失败，请检查后端是否启动。");
+    } finally {
+        setButtonLoading("createBtn", "创建中...", false);
+    }
+}
+
+async function handleVerifyOrder() {
+    const order_id = document.getElementById("verifyOrderId").value.trim();
+    const pid = document.getElementById("verifyPid").value.trim();
+    const timestamp = document.getElementById("verifyTimestamp").value.trim();
+    const token = document.getElementById("verifyToken").value.trim();
+
+    if (!order_id || !pid || !timestamp || !token) {
+        showAlert("warning", "请先完成订单创建。");
+        return;
+    }
+
+    setButtonLoading("verifyBtn", "验证中...", true);
+
+    try {
+        const res = await fetch(`${BASE_URL}/verify_order`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ order_id, pid, timestamp, token })
+        });
+
+        const result = await res.json();
+
+        if (result.success) {
+            const valid = result.data.valid;
+            document.getElementById("verifyResult").innerHTML = valid
+                ? `<span class="verify-pass">✅ 订单认证通过</span>`
+                : `<span class="verify-fail">❌ 订单认证失败</span>`;
+            showAlert(valid ? "success" : "danger", valid ? "订单认证通过。" : "订单认证失败。");
+        } else {
+            showAlert("danger", result.message || "验证失败。");
+        }
+    } catch (error) {
+        showAlert("danger", "请求失败，请检查后端是否启动。");
+    } finally {
+        setButtonLoading("verifyBtn", "验证中...", false);
+    }
+}
+
+async function handleFakeVerify() {
+    const order_id = document.getElementById("verifyOrderId").value.trim();
+    const pid = document.getElementById("verifyPid").value.trim();
+    const timestamp = document.getElementById("verifyTimestamp").value.trim();
+    const token = document.getElementById("verifyToken").value.trim();
+
+    if (!order_id || !pid || !timestamp || !token) {
+        showAlert("warning", "请先完成订单创建。");
+        return;
+    }
+
+    const fakeToken = token.slice(0, -1) + (token.slice(-1) === "0" ? "1" : "0");
+
+    try {
+        const res = await fetch(`${BASE_URL}/verify_order`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ order_id, pid, timestamp, token: fakeToken })
+        });
+
+        const result = await res.json();
+
+        if (result.success) {
+            const valid = result.data.valid;
+            document.getElementById("verifyResult").innerHTML = valid
+                ? `<span class="verify-pass">⚠️ 篡改后仍通过（异常）</span>`
+                : `<span class="verify-fail">✅ 篡改后认证失败，校验有效</span>`;
+            showAlert(valid ? "warning" : "success", valid ? "异常：伪造 token 竟然通过了。" : "篡改 token 后验证失败，说明校验有效。");
+        } else {
+            showAlert("danger", result.message || "验证失败。");
+        }
+    } catch (error) {
+        showAlert("danger", "请求失败，请检查后端是否启动。");
+    }
+}
+
+window.onload = loadLocalData;
+</script>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

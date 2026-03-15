@@ -1,36 +1,59 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from pathlib import Path
 from project.database.db import init_db, execute, query_one
 from project.crypto.pid import generate_pid
-from project.crypto.token_utils import generate_token,verify_token
+from project.crypto.token_utils import generate_token, verify_token
 import uuid
 
-
-
 app = Flask(__name__)
+CORS(app)
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+FRONTEND_DIR = BASE_DIR / "project" / "frontend"
 
 
+# ===== 前端页面路由 =====
 @app.route("/")
-def home():
-    return """
-    <h1>FoodShield Server Running</h1>
-    <p>Available test routes:</p>
-    <ul>
-        <li><a href="/get_order?order_id=123">GET /get_order?order_id=123</a></li>
-    </ul>
-    <p>POST routes:</p>
-    <ul>
-        <li>/register</li>
-        <li>/create_order</li>
-    </ul>
-    """
+def index_page():
+    return send_from_directory(FRONTEND_DIR, "index.html")
 
 
+@app.route("/index.html")
+def index_html():
+    return send_from_directory(FRONTEND_DIR, "index.html")
+
+
+@app.route("/user.html")
+def user_page():
+    return send_from_directory(FRONTEND_DIR, "user.html")
+
+
+@app.route("/rider.html")
+def rider_page():
+    return send_from_directory(FRONTEND_DIR, "rider.html")
+
+
+@app.route("/admin.html")
+def admin_page():
+    return send_from_directory(FRONTEND_DIR, "admin.html")
+
+
+@app.route("/css/<path:filename>")
+def css_files(filename):
+    return send_from_directory(FRONTEND_DIR / "css", filename)
+
+
+# ===== 后端 API =====
 @app.route("/register", methods=["POST"])
 def register():
     data = request.json
 
     if not data or "username" not in data:
-        return jsonify({"error": "username is required"}), 400
+        return jsonify({
+            "success": False,
+            "message": "username is required"
+        }), 400
 
     username = data["username"]
 
@@ -43,21 +66,19 @@ def register():
             "success": False,
             "message": "username already exists"
         }), 400
+
     temp_pid = f"temp_{uuid.uuid4()}"
 
     try:
-        # 先插入用户，拿到 user_id
         user_id = execute(
             "INSERT INTO users (username, pid) VALUES (?, ?)",
             (username, temp_pid)
         )
 
-        # generate_pid 返回的是 dict，不是字符串
         pid_result = generate_pid("FoodShield", str(user_id))
         pid = pid_result["pid"]
         r = pid_result["r"]
 
-        # 如果你的 users 表里还没有 pid_r 字段，就先只更新 pid
         execute(
             "UPDATE users SET pid=? WHERE id=?",
             (pid, user_id)
@@ -70,13 +91,13 @@ def register():
         }), 500
 
     return jsonify({
-    "success": True,
-    "message": "user registered successfully",
-    "data": {
-        "user_id": user_id,
-        "username": username,
-        "pid": pid,
-        "r": r
+        "success": True,
+        "message": "user registered successfully",
+        "data": {
+            "user_id": user_id,
+            "username": username,
+            "pid": pid,
+            "r": r
         }
     }), 201
 
@@ -133,8 +154,6 @@ def create_order():
             "status": "created"
         }
     }), 201
-    
-    
 
 
 @app.route("/verify_order", methods=["POST"])
@@ -147,7 +166,7 @@ def verify_order_api():
             return jsonify({
                 "success": False,
                 "message": f"{field} is required"
-            }), 400     
+            }), 400
 
     order_id = data["order_id"]
     pid = data["pid"]
@@ -157,26 +176,14 @@ def verify_order_api():
     is_valid = verify_token(order_id, pid, timestamp, provided_token)
 
     return jsonify({
-    "success": True,
-    "message": "order verification completed",
-    "data": {
-        "order_id": order_id,
-        "pid": pid,
-        "valid": is_valid
+        "success": True,
+        "message": "order verification completed",
+        "data": {
+            "order_id": order_id,
+            "pid": pid,
+            "valid": is_valid
         }
-    }), 200   
-
-
-
-
-@app.route("/get_order", methods=["GET"])
-def get_order():
-    order_id = request.args.get("order_id")
-
-    return jsonify({
-        "order_id": order_id,
-        "status": "valid"
-    })
+    }), 200
 
 
 if __name__ == "__main__":
