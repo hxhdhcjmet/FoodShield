@@ -1,0 +1,37 @@
+:root {
+    --primary: #ff6b00;   /* 外卖橙 */
+    --secondary: #00b14f; /* 骑手绿 */
+}
+
+body {
+    font-family: "Microsoft YaHei", sans-serif;
+    background: #f8f9fa;
+}
+
+.navbar-brand {
+    font-weight: bold;
+    color: var(--primary) !important;
+}
+
+.card {
+    border: none;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    border-radius: 12px;
+}
+
+.btn-primary {
+    background: var(--primary);
+    border: none;
+}
+
+.btn-success {
+    background: var(--secondary);
+}
+
+.chat-preview {
+    background: white;
+    border-radius: 12px;
+    padding: 15px;
+    height: 420px;
+    overflow-y: auto;
+}
