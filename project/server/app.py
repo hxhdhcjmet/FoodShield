@@ -1,7 +1,10 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from pathlib import Path
-from project.database.db import init_db, execute, query_one
+
+# 正确导入 db 中的所有函数
+from project.database.db import init_db, execute, query_one, query_all
+
 from project.crypto.pid import generate_pid
 from project.crypto.token_utils import generate_token, verify_token
 import uuid
@@ -13,7 +16,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 FRONTEND_DIR = BASE_DIR / "project" / "frontend"
 
 
-# ===== 前端页面路由 =====
+# ====================== 前端页面路由 ======================
 @app.route("/")
 def index_page():
     return send_from_directory(FRONTEND_DIR, "index.html")
@@ -44,86 +47,51 @@ def css_files(filename):
     return send_from_directory(FRONTEND_DIR / "css", filename)
 
 
-# ===== 后端 API =====
+# ====================== 后端业务 API ======================
+
 @app.route("/register", methods=["POST"])
 def register():
     data = request.json
-
     if not data or "username" not in data:
-        return jsonify({
-            "success": False,
-            "message": "username is required"
-        }), 400
+        return jsonify({"success": False, "message": "username is required"}), 400
 
     username = data["username"]
 
-    existing = query_one(
-        "SELECT * FROM users WHERE username = ?",
-        (username,)
-    )
+    existing = query_one("SELECT * FROM users WHERE username = ?", (username,))
     if existing:
-        return jsonify({
-            "success": False,
-            "message": "username already exists"
-        }), 400
-
-    temp_pid = f"temp_{uuid.uuid4()}"
+        return jsonify({"success": False, "message": "username already exists"}), 400
 
     try:
-        user_id = execute(
-            "INSERT INTO users (username, pid) VALUES (?, ?)",
-            (username, temp_pid)
-        )
+        # 先插入临时记录
+        temp_pid = f"temp_{uuid.uuid4()}"
+        user_id = execute("INSERT INTO users (username, pid) VALUES (?, ?)", (username, temp_pid))
 
+        # 生成真实 PID
         pid_result = generate_pid("FoodShield", str(user_id))
         pid = pid_result["pid"]
-        r = pid_result["r"]
 
-        execute(
-            "UPDATE users SET pid=? WHERE id=?",
-            (pid, user_id)
-        )
+        execute("UPDATE users SET pid = ? WHERE id = ?", (pid, user_id))
 
-    except Exception as e:
         return jsonify({
-            "success": False,
-            "message": str(e)
-        }), 500
-
-    return jsonify({
-        "success": True,
-        "message": "user registered successfully",
-        "data": {
-            "user_id": user_id,
-            "username": username,
-            "pid": pid,
-            "r": r
-        }
-    }), 201
+            "success": True,
+            "message": "user registered successfully",
+            "data": {"user_id": user_id, "username": username, "pid": pid}
+        }), 201
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 @app.route("/create_order", methods=["POST"])
 def create_order():
     data = request.json
-
     if not data or "pid" not in data:
-        return jsonify({
-            "success": False,
-            "message": "pid is required"
-        }), 400
+        return jsonify({"success": False, "message": "pid is required"}), 400
 
     pid = data["pid"]
 
-    user = query_one(
-        "SELECT * FROM users WHERE pid = ?",
-        (pid,)
-    )
-
+    user = query_one("SELECT * FROM users WHERE pid = ?", (pid,))
     if not user:
-        return jsonify({
-            "success": False,
-            "message": "user not found"
-        }), 404
+        return jsonify({"success": False, "message": "user not found"}), 404
 
     user_id = user["id"]
     order_id = str(uuid.uuid4())
@@ -137,55 +105,64 @@ def create_order():
             "INSERT INTO orders (order_id, user_id, token, token_timestamp, status) VALUES (?, ?, ?, ?, ?)",
             (order_id, user_id, token, timestamp, "created")
         )
-    except Exception as e:
         return jsonify({
-            "success": False,
-            "message": str(e)
-        }), 500
-
-    return jsonify({
-        "success": True,
-        "message": "order created successfully",
-        "data": {
-            "order_id": order_id,
-            "pid": pid,
-            "token": token,
-            "timestamp": timestamp,
-            "status": "created"
-        }
-    }), 201
+            "success": True,
+            "message": "order created successfully",
+            "data": {
+                "order_id": order_id,
+                "pid": pid,
+                "token": token,
+                "timestamp": timestamp,
+                "status": "created"
+            }
+        }), 201
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 @app.route("/verify_order", methods=["POST"])
 def verify_order_api():
     data = request.json
-
-    required_fields = ["order_id", "pid", "timestamp", "token"]
-    for field in required_fields:
+    required = ["order_id", "pid", "timestamp", "token"]
+    for field in required:
         if not data or field not in data:
-            return jsonify({
-                "success": False,
-                "message": f"{field} is required"
-            }), 400
+            return jsonify({"success": False, "message": f"{field} is required"}), 400
 
-    order_id = data["order_id"]
-    pid = data["pid"]
-    timestamp = data["timestamp"]
-    provided_token = data["token"]
-
-    is_valid = verify_token(order_id, pid, timestamp, provided_token)
+    is_valid = verify_token(data["order_id"], data["pid"], data["timestamp"], data["token"])
 
     return jsonify({
         "success": True,
         "message": "order verification completed",
-        "data": {
-            "order_id": order_id,
-            "pid": pid,
-            "valid": is_valid
-        }
+        "data": {"order_id": data["order_id"], "pid": data["pid"], "valid": is_valid}
     }), 200
+
+
+# ====================== 新增：骑手端接口 ======================
+@app.route("/get_pending_orders", methods=["GET"])
+def get_pending_orders():
+    try:
+        orders = query_all(
+            """
+            SELECT o.order_id, u.pid 
+            FROM orders o 
+            JOIN users u ON o.user_id = u.id 
+            WHERE o.status = 'created' 
+            ORDER BY o.id DESC 
+            LIMIT 10
+            """
+        )
+        
+        # 把 sqlite Row 对象转成普通 dict，方便前端使用
+        result = [dict(row) for row in orders]
+        
+        return jsonify({
+            "success": True,
+            "data": result
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 if __name__ == "__main__":
     init_db()
-    app.run(debug=True)
+    app.run(debug=True, host="127.0.0.1", port=5000)
