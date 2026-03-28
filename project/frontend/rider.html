@@ -7,89 +7,505 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="/css/style.css" rel="stylesheet">
     <style>
-        body { background: #f5f7fb; }
-        .order-card { border: none; border-radius: 18px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
-        .order-card:hover { transform: translateY(-4px); }
-        .pid { font-family: monospace; background: #f8f9fa; padding: 10px; border-radius: 8px; word-break: break-all; }
+        body {
+            background: #f5f7fb;
+        }
+        .navbar {
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+        .page-title {
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+        .step-card {
+            border: none;
+            border-radius: 18px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+            height: 100%;
+        }
+        .step-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+        .result-box {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 12px;
+            padding: 12px;
+            min-height: 56px;
+            word-break: break-all;
+        }
+        .section-tip {
+            font-size: 0.92rem;
+            color: #6c757d;
+        }
+        .order-card {
+            border: 1px solid #e9ecef;
+            border-radius: 14px;
+            background: #fff;
+            padding: 14px;
+            margin-bottom: 12px;
+        }
+        .order-meta {
+            font-size: 0.92rem;
+            color: #6c757d;
+        }
+        .chat-message {
+            border-radius: 12px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            border: 1px solid #e9ecef;
+            background: #fff;
+        }
+        .chat-message.user {
+            border-left: 4px solid #0d6efd;
+        }
+        .chat-message.rider {
+            border-left: 4px solid #198754;
+        }
+        .chat-message.system {
+            background: #f8f9fa;
+            border-left: 4px solid #6c757d;
+        }
+        .chat-meta {
+            font-size: 0.85rem;
+            color: #6c757d;
+            margin-bottom: 4px;
+        }
+        .chat-content {
+            color: #212529;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        #chatMessages {
+            min-height: 260px;
+            max-height: 420px;
+            overflow-y: auto;
+            background: #ffffff;
+        }
+        .badge-status {
+            font-size: 0.92rem;
+            padding: 0.45em 0.75em;
+        }
     </style>
 </head>
 <body>
-<nav class="navbar navbar-expand-lg navbar-dark bg-success">
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
     <div class="container">
-        <a class="navbar-brand fw-bold" href="/">🛵 骑手中心</a>
+        <a class="navbar-brand fw-bold" href="/">🍔 匿名外卖</a>
         <div class="navbar-nav ms-auto">
-            <a class="nav-link active" href="/rider.html">待接订单</a>
             <a class="nav-link" href="/user.html">用户端</a>
+            <a class="nav-link active" href="/rider.html">骑手端</a>
             <a class="nav-link" href="/admin.html">管理员端</a>
         </div>
     </div>
 </nav>
 
 <div class="container py-4">
-    <h2 class="mb-4">骑手端 · 待接订单</h2>
-    <div id="alertBox"></div>
-    <div id="ordersList" class="row g-4"></div>
-    <div id="emptyState" class="text-center py-5 d-none">
-        <h3 class="text-muted">暂无待接订单</h3>
-        <p>用户端创建新订单后刷新即可看到</p>
+    <div class="mb-4">
+        <h2 class="page-title">骑手端 · 接单与匿名通信</h2>
+        <div class="text-muted">流程：查看待接订单 → 接单 → 进入订单聊天房间 → 发送消息</div>
     </div>
-    <div class="text-center mt-4">
-        <button class="btn btn-success btn-lg" onclick="refreshOrders()">🔄 刷新订单列表</button>
+
+    <div id="alertBox"></div>
+
+    <div class="row g-4">
+        <!-- 1 查看待接订单 -->
+        <div class="col-lg-5">
+            <div class="card step-card p-4">
+                <div class="step-title text-success mb-2">1. 查看待接订单</div>
+                <div class="section-tip mb-3">平台列出当前状态为 created 的待接订单。</div>
+
+                <div class="d-flex gap-2 flex-wrap mb-3">
+                    <button id="refreshOrdersBtn" class="btn btn-success" onclick="loadPendingOrders()">
+                        刷新待接订单
+                    </button>
+                </div>
+
+                <div id="pendingOrdersBox">
+                    <div class="result-box text-muted">暂无订单，请先刷新。</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2 当前接单信息 -->
+        <div class="col-lg-7">
+            <div class="card step-card p-4">
+                <div class="step-title text-primary mb-2">2. 当前接单与聊天</div>
+                <div class="section-tip mb-3">接单成功后，骑手进入该订单的匿名通信房间。</div>
+
+                <div class="row g-3">
+                    <div class="col-md-8">
+                        <label class="form-label">当前订单号</label>
+                        <input id="currentOrderId" type="text" class="form-control" readonly>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">订单状态</label>
+                        <div>
+                            <span id="currentOrderStatus" class="badge text-bg-secondary badge-status">未接单</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-3">
+                    <label class="form-label">聊天状态</label>
+                    <div id="chatStatusBox" class="result-box">尚未进入聊天房间</div>
+                </div>
+
+                <div class="d-flex gap-2 flex-wrap mt-3">
+                    <button id="joinChatBtn" class="btn btn-primary" onclick="handleJoinChat()" disabled>
+                        进入聊天房间
+                    </button>
+                    <button class="btn btn-outline-secondary" onclick="loadMessageHistory()">
+                        刷新历史消息
+                    </button>
+                </div>
+
+                <div class="mt-3">
+                    <label class="form-label">聊天记录</label>
+                    <div id="chatMessages" class="result-box"></div>
+                </div>
+
+                <div class="mt-3">
+                    <label for="chatInput" class="form-label">发送消息</label>
+                    <div class="input-group">
+                        <input id="chatInput" type="text" class="form-control" placeholder="例如：您好，我已到楼下。">
+                        <button id="sendMsgBtn" class="btn btn-primary" onclick="handleSendMessage()" disabled>
+                            发送
+                        </button>
+                    </div>
+                </div>
+
+                <div class="section-tip mt-2">
+                    当前阶段骑手端采用平台接单后入房的最小实现，用于完成第三周双向通信联调。
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
 const BASE_URL = "http://127.0.0.1:5000";
+const RIDER_PID = "RIDER_DEMO_001";
+
+const socket = io(window.location.origin, {
+    path: "/socket.io",
+    transports: ["polling", "websocket"],
+    autoConnect: true,
+    reconnection: true
+});
+
+let hasJoinedChatRoom = false;
 
 function showAlert(type, message) {
-    document.getElementById("alertBox").innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+    const alertBox = document.getElementById("alertBox");
+    alertBox.innerHTML = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    `;
 }
 
-async function loadOrders() {
-    const list = document.getElementById("ordersList");
-    const empty = document.getElementById("emptyState");
-    list.innerHTML = '<div class="col-12 text-center py-5"><div class="spinner-border text-success"></div><p>加载中...</p></div>';
+function setButtonLoading(buttonId, loadingText, isLoading) {
+    const btn = document.getElementById(buttonId);
+    if (!btn) return;
+    if (isLoading) {
+        btn.dataset.oldText = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = loadingText;
+    } else {
+        btn.disabled = false;
+        btn.innerHTML = btn.dataset.oldText || btn.innerHTML;
+    }
+}
+
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function updateChatStatus(message, type = "secondary") {
+    const box = document.getElementById("chatStatusBox");
+    box.innerHTML = `<span class="text-${type}">${message}</span>`;
+}
+
+function updateCurrentOrder(orderId, status) {
+    document.getElementById("currentOrderId").value = orderId || "";
+    const badge = document.getElementById("currentOrderStatus");
+    badge.innerText = status || "未知";
+    badge.className = "badge badge-status";
+    if (status === "taken" || status === "delivering" || status === "completed") {
+        badge.classList.add("text-bg-success");
+    } else {
+        badge.classList.add("text-bg-secondary");
+    }
+}
+
+function enableChatInput(enabled) {
+    document.getElementById("sendMsgBtn").disabled = !enabled;
+    document.getElementById("chatInput").disabled = !enabled;
+}
+
+function appendMessage(msg) {
+    const container = document.getElementById("chatMessages");
+    if (!container) return;
+
+    const div = document.createElement("div");
+
+    if (msg.type === "system") {
+        div.className = "chat-message system";
+        div.innerHTML = `
+            <div class="chat-meta">系统消息 · ${msg.timestamp || ""}</div>
+            <div class="chat-content">${escapeHtml(msg.message || "")}</div>
+        `;
+    } else {
+        const role = msg.role || "unknown";
+        const roleTextMap = {
+            user: "用户",
+            rider: "骑手",
+            admin: "管理员"
+        };
+        const roleText = roleTextMap[role] || role;
+        div.className = `chat-message ${role}`;
+        div.innerHTML = `
+            <div class="chat-meta">${roleText}${msg.sender_pid ? `（${escapeHtml(msg.sender_pid)}）` : ""} · ${msg.timestamp || ""}</div>
+            <div class="chat-content">${escapeHtml(msg.content || "")}</div>
+        `;
+    }
+
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+}
+
+function renderHistory(messages) {
+    const container = document.getElementById("chatMessages");
+    container.innerHTML = "";
+
+    if (!messages || messages.length === 0) {
+        container.innerHTML = `<div class="text-muted">暂无历史消息。</div>`;
+        return;
+    }
+
+    messages.forEach(msg => {
+        appendMessage({
+            type: "chat",
+            msg_id: msg.msg_id,
+            order_id: msg.order_id,
+            sender_pid: msg.sender_pid,
+            role: msg.role,
+            content: msg.content,
+            timestamp: msg.timestamp
+        });
+    });
+}
+
+async function loadPendingOrders() {
+    setButtonLoading("refreshOrdersBtn", "刷新中...", true);
 
     try {
         const res = await fetch(`${BASE_URL}/get_pending_orders`);
         const result = await res.json();
 
-        if (!result.success || !result.data || result.data.length === 0) {
-            list.innerHTML = "";
-            empty.classList.remove("d-none");
+        const box = document.getElementById("pendingOrdersBox");
+
+        if (!result.success) {
+            box.innerHTML = `<div class="result-box text-danger">${escapeHtml(result.message || "获取待接订单失败。")}</div>`;
             return;
         }
 
-        empty.classList.add("d-none");
-        let html = "";
-        result.data.forEach(o => {
-            html += `
-                <div class="col-lg-6">
-                    <div class="card order-card p-4">
-                        <h5>订单号：${o.order_id}</h5>
-                        <p class="mb-2">用户匿名 PID：</p>
-                        <div class="pid">${o.pid}</div>
-                        <button class="btn btn-success w-100 mt-3" onclick="takeOrder('${o.order_id}', '${o.pid}')">
-                            接单并进入匿名聊天
-                        </button>
-                    </div>
-                </div>`;
-        });
-        list.innerHTML = html;
-    } catch (e) {
-        showAlert("danger", "无法连接后端，请确认后端正在运行！");
+        const orders = result.data || [];
+        if (orders.length === 0) {
+            box.innerHTML = `<div class="result-box text-muted">当前没有待接订单。</div>`;
+            return;
+        }
+
+        box.innerHTML = orders.map(order => `
+            <div class="order-card">
+                <div class="fw-semibold mb-1">订单号：${escapeHtml(order.order_id)}</div>
+                <div class="order-meta mb-2">用户 PID：${escapeHtml(order.pid || "")}</div>
+                <div class="mb-2">
+                    <span class="badge text-bg-secondary">${escapeHtml(order.status || "unknown")}</span>
+                </div>
+                <button class="btn btn-success btn-sm" onclick="handleTakeOrder('${escapeHtml(order.order_id)}')">
+                    接单并准备进入聊天
+                </button>
+            </div>
+        `).join("");
+
+    } catch (error) {
+        showAlert("danger", "获取待接订单失败，请检查后端是否启动。");
+    } finally {
+        setButtonLoading("refreshOrdersBtn", "刷新中...", false);
     }
 }
 
-async function takeOrder(orderId, pid) {
-    showAlert("success", `✅ 已接单！订单 ${orderId}<br>用户PID: ${pid}`);
-    setTimeout(() => alert("🚀 聊天通道打开（演示模式）"), 800);
+async function handleTakeOrder(orderId) {
+    try {
+        const res = await fetch(`${BASE_URL}/take_order`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ order_id: orderId })
+        });
+
+        const result = await res.json();
+
+        if (result.success) {
+            updateCurrentOrder(orderId, result.data.status || "taken");
+            document.getElementById("joinChatBtn").disabled = false;
+            hasJoinedChatRoom = false;
+            enableChatInput(false);
+            updateChatStatus("接单成功，请进入聊天房间。", "success");
+            document.getElementById("chatMessages").innerHTML = "";
+            showAlert("success", "接单成功。");
+            await loadPendingOrders();
+        } else {
+            showAlert("danger", result.message || "接单失败。");
+        }
+    } catch (error) {
+        showAlert("danger", "接单失败，请检查后端是否启动。");
+    }
 }
 
-function refreshOrders() { loadOrders(); }
+async function handleJoinChat() {
+    const orderId = document.getElementById("currentOrderId").value.trim();
 
-window.onload = loadOrders;
+    if (!orderId) {
+        showAlert("warning", "请先接单。");
+        return;
+    }
+
+    setButtonLoading("joinChatBtn", "进入中...", true);
+
+    try {
+        console.log("join_order_as_rider payload:", {
+            order_id: orderId,
+            role: "rider"
+        });
+
+        socket.emit("join_order_as_rider", {
+            order_id: orderId,
+            role: "rider"
+        });
+    } catch (error) {
+        console.error("handleJoinChat error:", error);
+        showAlert("danger", "进入聊天房间失败。");
+    } finally {
+        setButtonLoading("joinChatBtn", "进入中...", false);
+    }
+}
+
+async function loadMessageHistory() {
+    const orderId = document.getElementById("currentOrderId").value.trim();
+
+    if (!orderId) {
+        showAlert("warning", "请先接单。");
+        return;
+    }
+
+    try {
+        const res = await fetch(`${BASE_URL}/get_message_history/${orderId}`);
+        const result = await res.json();
+
+        if (result.success) {
+            renderHistory(result.data || []);
+        } else {
+            showAlert("danger", result.message || "拉取历史消息失败。");
+        }
+    } catch (error) {
+        showAlert("danger", "拉取历史消息失败，请检查后端是否启动。");
+    }
+}
+
+function handleSendMessage() {
+    if (!hasJoinedChatRoom) {
+        showAlert("warning", "请先进入聊天房间。");
+        return;
+    }
+
+    const orderId = document.getElementById("currentOrderId").value.trim();
+    const contentInput = document.getElementById("chatInput");
+    const content = contentInput.value.trim();
+
+    if (!orderId) {
+        showAlert("warning", "请先接单。");
+        return;
+    }
+
+    if (!content) {
+        showAlert("warning", "请输入消息内容。");
+        return;
+    }
+
+    socket.emit("send_message", {
+        order_id: orderId,
+        sender_pid: RIDER_PID,
+        role: "rider",
+        content
+    });
+
+    contentInput.value = "";
+}
+
+socket.on("connect", () => {
+    console.log("Socket connected, id =", socket.id);
+    updateChatStatus("Socket 已连接，可接单后入房。", "secondary");
+});
+
+socket.on("connect_error", (err) => {
+    console.error("socket connect_error:", err);
+    updateChatStatus("Socket 连接失败，请查看控制台。", "danger");
+});
+
+socket.on("disconnect", (reason) => {
+    console.log("socket disconnected:", reason);
+    hasJoinedChatRoom = false;
+    enableChatInput(false);
+    updateChatStatus("连接已断开。", "danger");
+});
+
+socket.on("join_result", async (res) => {
+    if (res.success) {
+        hasJoinedChatRoom = true;
+        enableChatInput(true);
+        updateChatStatus(`已进入订单房间：${res.order_id}`, "success");
+        showAlert("success", res.message || "进入聊天房间成功。");
+        await loadMessageHistory();
+    } else {
+        hasJoinedChatRoom = false;
+        enableChatInput(false);
+        updateChatStatus(res.message || "进入聊天房间失败。", "danger");
+        showAlert("danger", res.message || "进入聊天房间失败。");
+    }
+});
+
+socket.on("system_message", (msg) => {
+    appendMessage({
+        type: "system",
+        message: msg.message,
+        timestamp: msg.timestamp
+    });
+});
+
+socket.on("receive_message", (msg) => {
+    appendMessage(msg);
+});
+
+socket.on("error_message", (msg) => {
+    showAlert("danger", msg.message || "聊天消息发送失败。");
+});
+
+window.onload = () => {
+    enableChatInput(false);
+    loadPendingOrders();
+};
 </script>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

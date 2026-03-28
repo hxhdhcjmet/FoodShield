@@ -4,6 +4,7 @@ from flask_socketio import SocketIO, emit, join_room
 from pathlib import Path
 from datetime import datetime
 import uuid
+from project.crypto.message_utils import calculate_message_hash
 
 from project.database.db import init_db, execute, query_one, query_all
 from project.crypto.pid import generate_pid
@@ -30,7 +31,6 @@ FRONTEND_DIR = BASE_DIR / "project" / "frontend"
 
 def now_iso():
     return datetime.now().isoformat(timespec="seconds")
-
 
 def get_order_by_order_id(order_id: str):
     return query_one("SELECT * FROM orders WHERE order_id = ?", (order_id,))
@@ -468,15 +468,24 @@ def handle_send_message(data):
         })
         return
 
+    timestamp = now_iso()
+    message_hash = calculate_message_hash(
+        order_id,
+        sender_pid,
+        role,
+        content,
+        timestamp
+    )
+
     msg = {
-        "type": "chat",
-        "msg_id": str(uuid.uuid4()),
-        "order_id": order_id,
-        "sender_pid": sender_pid,
-        "role": role,
-        "content": content,
-        "message_hash": None,
-        "timestamp": now_iso()
+    "type": "chat",
+    "msg_id": str(uuid.uuid4()),
+    "order_id": order_id,
+    "sender_pid": sender_pid,
+    "role": role,
+    "content": content,
+    "message_hash": message_hash,
+    "timestamp": timestamp
     }
 
     try:
