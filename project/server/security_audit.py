@@ -1,4 +1,4 @@
-from logger import CommunicationLogger
+from .logger import CommunicationLogger
 
 class SecurityAuditor:
     """
