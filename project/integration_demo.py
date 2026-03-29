@@ -3,10 +3,10 @@
 # - 测试安全机制
 
 import time 
-from crypto.pid import generate_pid
-from server.logger import CommunicationLogger
-from server.security_audit import SecurityAuditor
-from crypto.token_utils import generate_token,verify_token
+from project.crypto.pid import generate_pid
+from project.server.logger import CommunicationLogger
+from project.server.security_audit import SecurityAuditor
+from project.crypto.token_utils import generate_token, verify_token
 
 def run_system_integration_test():
     """
@@ -72,7 +72,7 @@ def run_system_integration_test():
     logger.chat_logs[order_id][0]['content'] = '我把你的外卖吃了一半'
 
     # 篡改甚至重新计算单条记录的Hash
-    from crypto.merkle import hash_message
+    from project.crypto.merkle import hash_message
     tampered_log = logger.chat_logs[order_id][0]
     tampered_log['msg_hash'] = hash_message(order_id,tampered_log['sender_pid'],tampered_log['content'],tampered_log['timestamp'])
 
