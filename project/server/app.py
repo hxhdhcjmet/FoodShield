@@ -5,19 +5,14 @@ from pathlib import Path
 from datetime import datetime
 import uuid
 import json
-from project.crypto.merkle import hash_message
-from project.server.logger import create_merkle_snapshot
+
 from project.database.db import init_db, execute, query_one, query_all
 from project.crypto.pid import generate_pid
 from project.crypto.token_utils import generate_token, verify_token
+from project.crypto.merkle import hash_message
 from project.server.logger import create_merkle_snapshot, verify_order_integrity
 
 
-from project.server.logger import CommunicationLogger
-from project.server.security_audit import SecurityAuditor
-
-sys_logger = CommunicationLogger()
-auditor = SecurityAuditor(sys_logger)
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "foodshield-secret-key"
 
@@ -39,6 +34,7 @@ FRONTEND_DIR = BASE_DIR / "project" / "frontend"
 
 def now_iso():
     return datetime.now().isoformat(timespec="seconds")
+
 
 def get_order_by_order_id(order_id: str):
     return query_one("SELECT * FROM orders WHERE order_id = ?", (order_id,))
@@ -116,14 +112,12 @@ def register():
         return jsonify({"success": False, "message": "username already exists"}), 400
 
     try:
-        # 先插入临时 PID
         temp_pid = f"temp_{uuid.uuid4()}"
         user_id = execute(
             "INSERT INTO users (username, pid) VALUES (?, ?)",
             (username, temp_pid)
         )
 
-        # 生成真实 PID
         pid_result = generate_pid("FoodShield", str(user_id))
         pid = pid_result["pid"]
 
@@ -298,50 +292,172 @@ def get_message_history(order_id):
         return jsonify({"success": False, "message": str(e)}), 500
 
 
-@app.route('/api/admin/logs', methods=['GET'])
-def get_logs():
-    """获取指定订单的所有通信日志"""
-    order_id = request.args.get('order_id')
-    if not order_id:
-        return jsonify({"code": 400, "msg": "缺少 order_id 参数"})
-    logs = sys_logger.get_logs_by_order(order_id)
-    return jsonify({"code": 200, "data": logs})
+# ====================== 管理员 API（第四周） ======================
+@app.route("/admin/snapshot/<order_id>", methods=["POST"])
+def admin_create_snapshot(order_id):
+    try:
+        order = get_order_by_order_id(order_id)
+        if not order:
+            return jsonify({
+                "success": False,
+                "message": "order not found"
+            }), 404
 
-@app.route('/api/admin/seal', methods=['POST'])
-def seal_logs():
-    """生成并封存 Merkle Root"""
-    data = request.json
-    order_id = data.get('order_id')
-    root = sys_logger.seal_and_save_root(order_id)
-    return jsonify({"code": 200, "root": root, "msg": "Merkle Root 封存成功"})
+        result = create_merkle_snapshot(order_id)
 
-@app.route('/api/admin/verify', methods=['POST'])
-def verify_logs():
-    """验证日志完整性"""
-    data = request.json
-    order_id = data.get('order_id')
-    is_valid, msg = sys_logger.verify_integrity(order_id)
-    return jsonify({"code": 200 if is_valid else 403, "is_valid": is_valid, "msg": msg})
+        return jsonify({
+            "success": True,
+            "message": "snapshot created successfully",
+            "data": result
+        }), 200
 
-@app.route('/api/admin/trace', methods=['POST'])
-def trace_violation():
-    """条件溯源接口"""
-    data = request.json
-    order_id = data.get('order_id')
-    keyword = data.get('keyword')
-    
-    result = auditor.detect_security_violation(order_id, keyword)
-    
-    # 如果允许溯源，这里可以模拟从数据库将 PID 映射回真实身份的过程
-    # 这里为了 Demo 效果，如果锁定 PID，我们模拟返回真实信息
-    if result["safe_to_trace"]:
-        real_identities = []
-        for pid in result["target_pids"]:
-            # 模拟解密或查表操作：PID -> Real ID
-            real_identities.append({"pid": pid, "real_id": f"RealUser_of_{pid[-4:]}"})
-        result["traced_users"] = real_identities
-        
-    return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+@app.route("/admin/messages/<order_id>", methods=["GET"])
+def admin_get_messages(order_id):
+    try:
+        order = get_order_by_order_id(order_id)
+        if not order:
+            return jsonify({
+                "success": False,
+                "message": "order not found"
+            }), 404
+
+        history = get_message_history_by_order(order_id)
+        return jsonify({
+            "success": True,
+            "message": "admin fetched messages successfully",
+            "data": history
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+@app.route("/admin/audit_logs/<order_id>", methods=["GET"])
+def admin_get_audit_logs(order_id):
+    try:
+        order = get_order_by_order_id(order_id)
+        if not order:
+            return jsonify({
+                "success": False,
+                "message": "order not found"
+            }), 404
+
+        rows = query_all(
+            """
+            SELECT id, order_id, action, detail, merkle_root, created_at
+            FROM audit_logs
+            WHERE order_id = ?
+            ORDER BY id DESC
+            """,
+            (order_id,)
+        )
+
+        logs = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["detail"] = json.loads(item["detail"]) if item["detail"] else {}
+            except Exception:
+                pass
+            logs.append(item)
+
+        return jsonify({
+            "success": True,
+            "message": "admin fetched audit logs successfully",
+            "data": logs
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+@app.route("/admin/verify/<order_id>", methods=["POST"])
+def admin_verify_order(order_id):
+    try:
+        order = get_order_by_order_id(order_id)
+        if not order:
+            return jsonify({
+                "success": False,
+                "message": "order not found"
+            }), 404
+
+        result = verify_order_integrity(order_id)
+
+        return jsonify({
+            "success": result["success"],
+            "message": "integrity verification completed" if result["success"] else "integrity verification failed",
+            "data": result
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+@app.route("/admin/orders", methods=["GET"])
+def admin_get_orders():
+    try:
+        rows = query_all(
+            """
+            SELECT o.order_id, o.status, COUNT(m.id) AS message_count
+            FROM orders o
+            LEFT JOIN messages m ON o.order_id = m.order_id
+            GROUP BY o.order_id, o.status
+            ORDER BY o.id DESC
+            """
+        )
+
+        result = []
+        for row in rows:
+            order_id = row["order_id"]
+
+            latest_log = query_one(
+                """
+                SELECT action, merkle_root, created_at
+                FROM audit_logs
+                WHERE order_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (order_id,)
+            )
+
+            result.append({
+                "order_id": order_id,
+                "status": row["status"],
+                "message_count": row["message_count"],
+                "latest_action": latest_log["action"] if latest_log else None,
+                "latest_merkle_root": latest_log["merkle_root"] if latest_log else None,
+                "latest_audit_time": latest_log["created_at"] if latest_log else None
+            })
+
+        return jsonify({
+            "success": True,
+            "message": "admin fetched orders successfully",
+            "data": result
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
 
 # ====================== WebSocket 事件 ======================
 
@@ -506,8 +622,6 @@ def handle_send_message(data):
     role = data["role"]
     content = str(data["content"]).strip()
 
-    sys_logger.record_chat_message(order_id, sender_pid, content)
-
     if not content:
         emit("error_message", {
             "type": "error",
@@ -523,11 +637,9 @@ def handle_send_message(data):
         })
         return
 
-    # 只生成一次 timestamp，后面哈希和数据库都用这个值
     timestamp = now_iso()
     msg_id = str(uuid.uuid4())
 
-    # 用统一的消息哈希函数
     message_hash = hash_message(
         order_id=order_id,
         sender_pid=sender_pid,
@@ -548,7 +660,6 @@ def handle_send_message(data):
     }
 
     try:
-        # 1. 先存消息
         save_message(
             msg["msg_id"],
             msg["order_id"],
@@ -559,13 +670,10 @@ def handle_send_message(data):
             msg["timestamp"]
         )
 
-        # 2. 再基于该订单全部消息生成一次 Merkle Root 快照，并写入 audit_logs
         snapshot = create_merkle_snapshot(order_id)
 
-        # 3. 广播聊天消息
         emit("receive_message", msg, room=order_id)
 
-        # 4. 可选：广播一条系统消息，方便你调试
         emit("system_message", {
             "type": "system",
             "order_id": order_id,
@@ -580,116 +688,27 @@ def handle_send_message(data):
             "message": str(e)
         })
 
-@app.route("/admin/messages/<order_id>", methods=["GET"])
-def admin_get_messages(order_id):
-    try:
-        order = get_order_by_order_id(order_id)
-        if not order:
-            return jsonify({
-                "success": False,
-                "message": "order not found"
-            }), 404
-
-        history = get_message_history_by_order(order_id)
-        return jsonify({
-            "success": True,
-            "message": "admin fetched messages successfully",
-            "data": history
-        }), 200
-
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": str(e)
-        }), 500
-
-
-@app.route("/admin/audit_logs/<order_id>", methods=["GET"])
-def admin_get_audit_logs(order_id):
-    try:
-        order = get_order_by_order_id(order_id)
-        if not order:
-            return jsonify({
-                "success": False,
-                "message": "order not found"
-            }), 404
-
-        rows = query_all(
-            """
-            SELECT id, order_id, action, detail, merkle_root, created_at
-            FROM audit_logs
-            WHERE order_id = ?
-            ORDER BY id DESC
-            """,
-            (order_id,)
-        )
-
-        logs = []
-        for row in rows:
-            item = dict(row)
-            try:
-                item["detail"] = json.loads(item["detail"]) if item["detail"] else {}
-            except Exception:
-                pass
-            logs.append(item)
-
-        return jsonify({
-            "success": True,
-            "message": "admin fetched audit logs successfully",
-            "data": logs
-        }), 200
-
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": str(e)
-        }), 500
-
-@app.route("/admin/verify/<order_id>", methods=["POST"])
-def admin_verify_order(order_id):
-    try:
-        order = get_order_by_order_id(order_id)
-        if not order:
-            return jsonify({
-                "success": False,
-                "message": "order not found"
-            }), 404
-
-        result = verify_order_integrity(order_id)
-
-        return jsonify({
-            "success": result["success"],
-            "message": "integrity verification completed" if result["success"] else "integrity verification failed",
-            "data": result
-        }), 200
-
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": str(e)
-        }), 500
-
-
-@app.route("/admin/orders", methods=["GET"])
-def admin_get_orders():
+@app.route("/admin/backfill_snapshots", methods=["POST"])
+def admin_backfill_snapshots():
     try:
         rows = query_all(
             """
-            SELECT o.order_id, o.status, COUNT(m.id) AS message_count
+            SELECT DISTINCT o.order_id
             FROM orders o
             LEFT JOIN messages m ON o.order_id = m.order_id
-            GROUP BY o.order_id, o.status
-            ORDER BY o.id DESC
+            WHERE m.id IS NOT NULL
             """
         )
 
-        result = []
+        processed = []
+        skipped = []
+
         for row in rows:
             order_id = row["order_id"]
 
             latest_log = query_one(
                 """
-                SELECT action, merkle_root, created_at
+                SELECT id
                 FROM audit_logs
                 WHERE order_id = ?
                 ORDER BY id DESC
@@ -698,19 +717,26 @@ def admin_get_orders():
                 (order_id,)
             )
 
-            result.append({
+            if latest_log:
+                skipped.append(order_id)
+                continue
+
+            result = create_merkle_snapshot(order_id)
+            processed.append({
                 "order_id": order_id,
-                "status": row["status"],
-                "message_count": row["message_count"],
-                "latest_action": latest_log["action"] if latest_log else None,
-                "latest_merkle_root": latest_log["merkle_root"] if latest_log else None,
-                "latest_audit_time": latest_log["created_at"] if latest_log else None
+                "merkle_root": result["merkle_root"],
+                "message_count": result["message_count"]
             })
 
         return jsonify({
             "success": True,
-            "message": "admin fetched orders successfully",
-            "data": result
+            "message": "snapshot backfill completed",
+            "data": {
+                "processed": processed,
+                "skipped": skipped,
+                "processed_count": len(processed),
+                "skipped_count": len(skipped)
+            }
         }), 200
 
     except Exception as e:
@@ -718,6 +744,7 @@ def admin_get_orders():
             "success": False,
             "message": str(e)
         }), 500
+
 
 # ====================== 启动 ======================
 
