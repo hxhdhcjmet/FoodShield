@@ -1,114 +1,143 @@
 # 消息记录模块
 import time
-from project.crypto.merkle import hash_message,MerkleTree
+import json
 
-class CommunicationLogger:
+from project.database.db import query_all, query_one, execute
+from project.crypto.merkle import hash_message, build_merkle_root
+
+
+def get_order_messages(order_id: str):
     """
-    消息记录模块
-    负责接收聊天信息,计算其Hash,并储存到内存中的日志结构里
+    获取某个订单下的所有通信消息，按固定顺序返回
     """
-    def __init__(self):
-        self.chat_logs = {} # 存储聊天记录
-        self.audit_roots = {}# 存储已认证的Merkle Root
+    sql = """
+        SELECT id, msg_id, order_id, sender_pid, role, content, message_hash, timestamp, created_at
+        FROM messages
+        WHERE order_id = ?
+        ORDER BY timestamp ASC, id ASC
+    """
+    return query_all(sql, (order_id,))
 
-        # 初步使用字典储存,方便后续转数据库,直接一步到数据库需要与后端频繁对接,降低开发效率
-        # key:order_id,value:该订单下的所有聊天记录列表
-        #{
-            # "order_001":[
-            #  {"sender_pid":"PID_A","content":"您好,马上到","timestamp":...,"msg_hash":"..."},
-            #  {"sender_pid":"PID_B","content":"好的,马上下去取","timestamp":...,"msg_hash":...}
-        #   ]
-        #}
 
-    def record_chat_message(self,order_id : str, sender_pid : str, content : str)->dict:
+def create_merkle_snapshot(order_id: str) -> dict:
+    """
+    根据某订单当前所有消息的 message_hash 生成一次 Merkle Root 快照，
+    并写入 audit_logs
+    """
+    messages = get_order_messages(order_id)
+
+    leaf_hashes = [msg["message_hash"] for msg in messages if msg["message_hash"]]
+    merkle_root = build_merkle_root(leaf_hashes)
+
+    latest_msg_id = messages[-1]["msg_id"] if messages else None
+
+    detail = json.dumps(
+        {
+            "message_count": len(messages),
+            "latest_msg_id": latest_msg_id
+        },
+        ensure_ascii=False
+    )
+
+    execute(
         """
-        供WebSocket调用的接口:记录一条聊天信息并返回其完整结构
+        INSERT INTO audit_logs (order_id, action, detail, merkle_root)
+        VALUES (?, ?, ?, ?)
+        """,
+        (order_id, "MERKLE_ROOT_UPDATED", detail, merkle_root)
+    )
+
+    return {
+        "order_id": order_id,
+        "message_count": len(messages),
+        "latest_msg_id": latest_msg_id,
+        "merkle_root": merkle_root
+    }
+
+
+def verify_order_integrity(order_id: str) -> dict:
+    """
+    对某个订单的通信记录进行完整性验证：
+    1. 重新根据消息内容计算 message_hash
+    2. 检查与数据库中的 message_hash 是否一致
+    3. 重新生成当前 Merkle Root
+    4. 与最近一次 MERKLE_ROOT_UPDATED 快照比较
+    5. 将验证结果写入 audit_logs
+    """
+    messages = get_order_messages(order_id)
+
+    mismatches = []
+    recomputed_hashes = []
+
+    for msg in messages:
+        expected_hash = hash_message(
+            order_id=msg["order_id"],
+            sender_pid=msg["sender_pid"],
+            role=msg["role"],
+            content=msg["content"],
+            timestamp=msg["timestamp"]
+        )
+
+        recomputed_hashes.append(expected_hash)
+
+        if msg["message_hash"] != expected_hash:
+            mismatches.append(
+                {
+                    "msg_id": msg["msg_id"],
+                    "stored_hash": msg["message_hash"],
+                    "expected_hash": expected_hash
+                }
+            )
+
+    current_root = build_merkle_root(recomputed_hashes)
+
+    latest_snapshot = query_one(
         """
-        timestamp = str(int(time.time()))
-        msg_hash = hash_message(order_id,sender_pid,content,timestamp)
+        SELECT id, merkle_root, created_at
+        FROM audit_logs
+        WHERE order_id = ? AND action = 'MERKLE_ROOT_UPDATED'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (order_id,)
+    )
 
-        # 构建单条日志结构
-        log_entry = {
-            "order_id" : order_id,
-            "sender_pid" : sender_pid,
-            "content" : content,
-            "timestamp" : timestamp,
-            "msg_hash" : msg_hash
-        }
+    snapshot_root = latest_snapshot["merkle_root"] if latest_snapshot else None
+    root_match = (snapshot_root == current_root) if snapshot_root else False
 
-        if order_id not in self.chat_logs:
-            self.chat_logs[order_id] = []
+    passed = (len(mismatches) == 0) and root_match
+    action = "VERIFY_OK" if passed else "VERIFY_FAIL"
 
-        self.chat_logs[order_id].append(log_entry)
-        print(f"[日志模块]已经安全记录订单{order_id}的消息,防篡改哈希 : {msg_hash[:8]}...")
-        return log_entry
-    
-    def get_logs_by_order(self,order_id : str)->list:
+    detail = json.dumps(
+        {
+            "message_count": len(messages),
+            "hash_mismatch_count": len(mismatches),
+            "root_match": root_match,
+            "snapshot_root": snapshot_root,
+            "current_root": current_root,
+            "mismatches": mismatches
+        },
+        ensure_ascii=False
+    )
+
+    execute(
         """
-        查询接口:获取某个订单的所有聊天记录
-        """
-        return self.chat_logs.get(order_id,[])
-    
-    def seal_and_save_root(self,order_id : str)->str:
-        """
-        生成并封装Merkle Root(存证)
-        """
-        logs = self.chat_logs.get(order_id,[])
-        hashes = [log['msg_hash'] for log in logs]
+        INSERT INTO audit_logs (order_id, action, detail, merkle_root)
+        VALUES (?, ?, ?, ?)
+        """,
+        (order_id, action, detail, current_root)
+    )
 
-        tree = MerkleTree(hashes)
-        root = tree.get_root()
-        self.audit_roots[order_id] = root
-        return root
-    
-    def verify_integrity(self,order_id : str)->tuple:
-        """
-        验证日志完整性:重新计算当前日志的Root并与存证对比
-        """
-        saved_root = self.audit_roots.get(order_id)
-        if not saved_root:
-            return False,"未找到存证记录"
-        
-        current_root = MerkleTree([l['msg_hash'] for l in self.chat_logs[order_id]]).get_root()
-
-        if current_root == saved_root:
-            return True,"验证通过:日志完整"
-        else:
-            return False,"警告:检测到日志篡改"
-        
-    
-if __name__ == "__main__":
-    logger = CommunicationLogger()
-
-    order_id = "0001"
-    user_id = "USER_0001"
-    rider_id = "RIDER_PID_0001"
-
-    print("="*50,"测试","="*50)
-    print("骑手发送信息")
-    rider_msg = logger.record_chat_message(order_id,rider_id,"你好,你的外卖到了")
-    time.sleep(1)
-
-    print("用户回复信息")
-    user_msg = logger.record_chat_message(order_id,user_id,"收到,马上去取")
-
-    root = logger.seal_and_save_root(order_id)
-    print(f"原始merkle root:{root}")
-
-    # 模拟完整性校验
-    success,msg = logger.verify_integrity(order_id)
-    print(f"初次审计结果:{success},信息:{msg}")
-
-    # 模拟攻击
-    print("模拟黑客攻击...")
-    logger.chat_logs[order_id][0]['content'] = "我把外卖偷走了"
-    l = logger.chat_logs[order_id][0]
-    logger.chat_logs[order_id][0]['msg_hash'] = hash_message(order_id,l['sender_pid'],l['content'],l['timestamp'])
-
-    # 再次进行merkle审计
-    success,msg = logger.verify_integrity(order_id)
-    print(f'篡改后审计结果:{success},信息:{msg}')
-
+    return {
+        "success": passed,
+        "order_id": order_id,
+        "message_count": len(messages),
+        "hash_mismatch_count": len(mismatches),
+        "root_match": root_match,
+        "snapshot_root": snapshot_root,
+        "current_root": current_root,
+        "mismatches": mismatches
+    }
 
 
 

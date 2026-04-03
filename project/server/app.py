@@ -4,11 +4,14 @@ from flask_socketio import SocketIO, emit, join_room
 from pathlib import Path
 from datetime import datetime
 import uuid
-from project.crypto.message_utils import calculate_message_hash
-
+import json
+from project.crypto.merkle import hash_message
+from project.server.logger import create_merkle_snapshot
 from project.database.db import init_db, execute, query_one, query_all
 from project.crypto.pid import generate_pid
 from project.crypto.token_utils import generate_token, verify_token
+from project.server.logger import create_merkle_snapshot, verify_order_integrity
+
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "foodshield-secret-key"
@@ -468,27 +471,32 @@ def handle_send_message(data):
         })
         return
 
+    # 只生成一次 timestamp，后面哈希和数据库都用这个值
     timestamp = now_iso()
-    message_hash = calculate_message_hash(
-        order_id,
-        sender_pid,
-        role,
-        content,
-        timestamp
+    msg_id = str(uuid.uuid4())
+
+    # 用统一的消息哈希函数
+    message_hash = hash_message(
+        order_id=order_id,
+        sender_pid=sender_pid,
+        role=role,
+        content=content,
+        timestamp=timestamp
     )
 
     msg = {
-    "type": "chat",
-    "msg_id": str(uuid.uuid4()),
-    "order_id": order_id,
-    "sender_pid": sender_pid,
-    "role": role,
-    "content": content,
-    "message_hash": message_hash,
-    "timestamp": timestamp
+        "type": "chat",
+        "msg_id": msg_id,
+        "order_id": order_id,
+        "sender_pid": sender_pid,
+        "role": role,
+        "content": content,
+        "message_hash": message_hash,
+        "timestamp": timestamp
     }
 
     try:
+        # 1. 先存消息
         save_message(
             msg["msg_id"],
             msg["order_id"],
@@ -499,14 +507,165 @@ def handle_send_message(data):
             msg["timestamp"]
         )
 
+        # 2. 再基于该订单全部消息生成一次 Merkle Root 快照，并写入 audit_logs
+        snapshot = create_merkle_snapshot(order_id)
+
+        # 3. 广播聊天消息
         emit("receive_message", msg, room=order_id)
 
+        # 4. 可选：广播一条系统消息，方便你调试
+        emit("system_message", {
+            "type": "system",
+            "order_id": order_id,
+            "message": f"log snapshot updated, root={snapshot['merkle_root'][:12]}...",
+            "timestamp": now_iso()
+        }, room=order_id)
+
     except Exception as e:
+        print(f"[send_message] error: {e}")
         emit("error_message", {
             "type": "error",
             "message": str(e)
         })
 
+@app.route("/admin/messages/<order_id>", methods=["GET"])
+def admin_get_messages(order_id):
+    try:
+        order = get_order_by_order_id(order_id)
+        if not order:
+            return jsonify({
+                "success": False,
+                "message": "order not found"
+            }), 404
+
+        history = get_message_history_by_order(order_id)
+        return jsonify({
+            "success": True,
+            "message": "admin fetched messages successfully",
+            "data": history
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+@app.route("/admin/audit_logs/<order_id>", methods=["GET"])
+def admin_get_audit_logs(order_id):
+    try:
+        order = get_order_by_order_id(order_id)
+        if not order:
+            return jsonify({
+                "success": False,
+                "message": "order not found"
+            }), 404
+
+        rows = query_all(
+            """
+            SELECT id, order_id, action, detail, merkle_root, created_at
+            FROM audit_logs
+            WHERE order_id = ?
+            ORDER BY id DESC
+            """,
+            (order_id,)
+        )
+
+        logs = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["detail"] = json.loads(item["detail"]) if item["detail"] else {}
+            except Exception:
+                pass
+            logs.append(item)
+
+        return jsonify({
+            "success": True,
+            "message": "admin fetched audit logs successfully",
+            "data": logs
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+@app.route("/admin/verify/<order_id>", methods=["POST"])
+def admin_verify_order(order_id):
+    try:
+        order = get_order_by_order_id(order_id)
+        if not order:
+            return jsonify({
+                "success": False,
+                "message": "order not found"
+            }), 404
+
+        result = verify_order_integrity(order_id)
+
+        return jsonify({
+            "success": result["success"],
+            "message": "integrity verification completed" if result["success"] else "integrity verification failed",
+            "data": result
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+@app.route("/admin/orders", methods=["GET"])
+def admin_get_orders():
+    try:
+        rows = query_all(
+            """
+            SELECT o.order_id, o.status, COUNT(m.id) AS message_count
+            FROM orders o
+            LEFT JOIN messages m ON o.order_id = m.order_id
+            GROUP BY o.order_id, o.status
+            ORDER BY o.id DESC
+            """
+        )
+
+        result = []
+        for row in rows:
+            order_id = row["order_id"]
+
+            latest_log = query_one(
+                """
+                SELECT action, merkle_root, created_at
+                FROM audit_logs
+                WHERE order_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (order_id,)
+            )
+
+            result.append({
+                "order_id": order_id,
+                "status": row["status"],
+                "message_count": row["message_count"],
+                "latest_action": latest_log["action"] if latest_log else None,
+                "latest_merkle_root": latest_log["merkle_root"] if latest_log else None,
+                "latest_audit_time": latest_log["created_at"] if latest_log else None
+            })
+
+        return jsonify({
+            "success": True,
+            "message": "admin fetched orders successfully",
+            "data": result
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
 
 # ====================== 启动 ======================
 
