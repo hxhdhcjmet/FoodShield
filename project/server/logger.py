@@ -1,7 +1,7 @@
 # 消息记录模块
 import time
 from project.crypto.merkle import hash_message,MerkleTree
-
+from project.database.db import query_all
 class CommunicationLogger:
     """
     消息记录模块
@@ -63,18 +63,39 @@ class CommunicationLogger:
     
     def verify_integrity(self,order_id : str)->tuple:
         """
-        验证日志完整性:重新计算当前日志的Root并与存证对比
+        验证日志完整性: 从数据库读取当前真实数据，重新计算Root并与存证对比
         """
         saved_root = self.audit_roots.get(order_id)
         if not saved_root:
-            return False,"未找到存证记录"
+            return False, "未找到存证记录"
         
-        current_root = MerkleTree([l['msg_hash'] for l in self.chat_logs[order_id]]).get_root()
+        # 【修正这里】直接调用 query_all，不要加 db.
+        # 注意：这里的 SQL 语句要确保和你数据库中的表名、字段名对得上
+        current_logs = query_all("SELECT * FROM messages WHERE order_id = ?", (order_id,))
+
+        if not current_logs:
+            return False, "数据库中未找到相关聊天记录"
+
+        # 重新计算哈希列表
+        current_hashes = []
+        for log in current_logs:
+            # 根据你数据库的字段名提取数据，重新计算每一条消息的哈希
+            # 这里的字段名（如 order_id, sender_pid 等）必须与数据库表结构完全一致
+            h = hash_message(
+                str(log['order_id']), 
+                str(log['sender_pid']), 
+                str(log['content']), 
+                str(log['timestamp'])
+            )
+            current_hashes.append(h)
+
+        # 构建当前的 Merkle Tree
+        current_root = MerkleTree(current_hashes).get_root()
 
         if current_root == saved_root:
-            return True,"验证通过:日志完整"
+            return True, "验证通过: 日志完整"
         else:
-            return False,"警告:检测到日志篡改"
+            return False, "警告: 检测到日志篡改"
         
     
 if __name__ == "__main__":
