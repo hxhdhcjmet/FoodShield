@@ -10,6 +10,11 @@ from project.database.db import init_db, execute, query_one, query_all
 from project.crypto.pid import generate_pid
 from project.crypto.token_utils import generate_token, verify_token
 
+from project.server.logger import CommunicationLogger
+from project.server.security_audit import SecurityAuditor
+
+sys_logger = CommunicationLogger()
+auditor = SecurityAuditor(sys_logger)
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "foodshield-secret-key"
 
@@ -290,6 +295,51 @@ def get_message_history(order_id):
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+@app.route('/api/admin/logs', methods=['GET'])
+def get_logs():
+    """获取指定订单的所有通信日志"""
+    order_id = request.args.get('order_id')
+    if not order_id:
+        return jsonify({"code": 400, "msg": "缺少 order_id 参数"})
+    logs = sys_logger.get_logs_by_order(order_id)
+    return jsonify({"code": 200, "data": logs})
+
+@app.route('/api/admin/seal', methods=['POST'])
+def seal_logs():
+    """生成并封存 Merkle Root"""
+    data = request.json
+    order_id = data.get('order_id')
+    root = sys_logger.seal_and_save_root(order_id)
+    return jsonify({"code": 200, "root": root, "msg": "Merkle Root 封存成功"})
+
+@app.route('/api/admin/verify', methods=['POST'])
+def verify_logs():
+    """验证日志完整性"""
+    data = request.json
+    order_id = data.get('order_id')
+    is_valid, msg = sys_logger.verify_integrity(order_id)
+    return jsonify({"code": 200 if is_valid else 403, "is_valid": is_valid, "msg": msg})
+
+@app.route('/api/admin/trace', methods=['POST'])
+def trace_violation():
+    """条件溯源接口"""
+    data = request.json
+    order_id = data.get('order_id')
+    keyword = data.get('keyword')
+    
+    result = auditor.detect_security_violation(order_id, keyword)
+    
+    # 如果允许溯源，这里可以模拟从数据库将 PID 映射回真实身份的过程
+    # 这里为了 Demo 效果，如果锁定 PID，我们模拟返回真实信息
+    if result["safe_to_trace"]:
+        real_identities = []
+        for pid in result["target_pids"]:
+            # 模拟解密或查表操作：PID -> Real ID
+            real_identities.append({"pid": pid, "real_id": f"RealUser_of_{pid[-4:]}"})
+        result["traced_users"] = real_identities
+        
+    return jsonify({"code": 200, "data": result})
+
 # ====================== WebSocket 事件 ======================
 
 @socketio.on("connect")
@@ -452,6 +502,8 @@ def handle_send_message(data):
     sender_pid = data["sender_pid"]
     role = data["role"]
     content = str(data["content"]).strip()
+
+    sys_logger.record_chat_message(order_id, sender_pid, content)
 
     if not content:
         emit("error_message", {
