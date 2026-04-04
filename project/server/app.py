@@ -746,6 +746,75 @@ def admin_backfill_snapshots():
         }), 500
 
 
+# ====================== 条件溯源 API 补充 ======================
+@app.route("/admin/trace", methods=["POST"])
+def admin_trace_violation():
+    data = request.json
+    order_id = data.get("order_id")
+    keyword = data.get("keyword", "").strip()
+
+    if not order_id or not keyword:
+        return jsonify({"success": False, "message": "order_id and keyword are required"}), 400
+
+    try:
+        # 1. 强制进行完整性校验
+        integrity = verify_order_integrity(order_id)
+        if not integrity.get("is_valid"):
+            return jsonify({
+                "success": True,
+                "data": {
+                    "safe_to_trace": False,
+                    "message": "底层日志校验失败，证据链已被污染，系统阻断溯源操作！"
+                }
+            })
+
+        # 2. 检查关键字是否命中
+        messages = get_message_history_by_order(order_id)
+        malicious_pids = set()
+        for msg in messages:
+            # 只要内容包含关键字且存在发送者，就记录 PID
+            if keyword in msg.get("content", "") and msg.get("sender_pid"):
+                malicious_pids.add(msg.get("sender_pid"))
+
+        if not malicious_pids:
+            return jsonify({
+                "success": True,
+                "data": {
+                    "safe_to_trace": False,
+                    "message": f"未命中：聊天记录中不存在违规词汇 '{keyword}'。"
+                }
+            })
+
+        # 3. 命中！解密真实身份
+        traced_users = []
+        for pid in malicious_pids:
+            # 健壮性改进：尝试关联 users 表
+            user = query_one("SELECT username FROM users WHERE pid = ?", (pid,))
+            if user:
+                traced_users.append({
+                    "pid": pid,
+                    "username": user["username"]
+                })
+            else:
+                # 兜底处理：如果没注册真名，至少把 PID 显示出来
+                traced_users.append({
+                    "pid": pid,
+                    "username": "未在库注册身份 (测试数据)"
+                })
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "safe_to_trace": True,
+                "message": "检测命中！已锁定涉嫌违规 PID，准许溯源。",
+                "traced_users": traced_users
+            }
+        })
+
+    except Exception as e:
+        print(f"溯源出错: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+    
 # ====================== 启动 ======================
 
 if __name__ == "__main__":

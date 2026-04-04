@@ -33,20 +33,21 @@
                 <h5 class="fw-bold mb-3">🔍 订单查询</h5>
                 <div class="input-group mb-3">
                     <input type="text" id="orderIdInput" class="form-control" placeholder="输入订单号 (如: 001)">
-                    <button class="btn btn-primary" onclick="fetchLogs()">查询日志</button>
+                    <button class="btn btn-primary" onclick="fetchMessages()">查询日志</button>
                 </div>
             </div>
 
             <div class="card p-3">
                 <h5 class="fw-bold mb-3">🛡️ 安全审计 (Merkle Tree)</h5>
-                <button class="btn btn-outline-success mb-2" onclick="sealLogs()">1. 封存日志 (生成 Root)</button>
-                <button class="btn btn-outline-warning" onclick="verifyLogs()">2. 验证证据链完整性</button>
+                <button class="btn btn-outline-success mb-2" onclick="sealSnapshot()">1. 封存日志 (生成 Root)</button>
+                <button class="btn btn-outline-warning mb-2" onclick="verifyOrder()">2. 验证证据链完整性</button>
+                <button class="btn btn-outline-info" onclick="fetchAuditLogs()">3. 查看历史审计记录</button>
                 <div id="auditResult" class="mt-3 small fw-bold"></div>
             </div>
 
             <div class="card p-3 border-danger">
                 <h5 class="fw-bold mb-3 text-danger">🚨 条件溯源</h5>
-                <p class="small text-muted">当发生投诉时，输入违规关键词。只有日志未被篡改且命中关键词时，方可解密真实身份。</p>
+                <p class="small text-muted">输入违规关键词，当底层日志未被篡改且命中关键词时，系统才允许溯源解密。</p>
                 <input type="text" id="keywordInput" class="form-control mb-2" placeholder="输入违规词汇 (如: 穷鬼)">
                 <button class="btn btn-danger w-100" onclick="traceViolation()">启动溯源程序</button>
             </div>
@@ -55,23 +56,30 @@
         <div class="col-md-8">
             <div id="alertBox"></div>
             
-            <div class="card p-3">
+            <div class="card p-3" id="messageCard">
                 <h5 class="fw-bold mb-3">📜 通信防篡改记录</h5>
                 <div class="table-responsive">
                     <table class="table table-hover log-table">
                         <thead class="table-light">
                             <tr>
                                 <th>时间戳</th>
+                                <th>角色</th>
                                 <th>发送方 (PID)</th>
                                 <th>内容</th>
                                 <th>消息 Hash (防篡改)</th>
                             </tr>
                         </thead>
                         <tbody id="logBody">
-                            <tr><td colspan="4" class="text-center text-muted">请输入订单号查询记录...</td></tr>
+                            <tr><td colspan="5" class="text-center text-muted">请输入订单号查询记录...</td></tr>
                         </tbody>
                     </table>
                 </div>
+            </div>
+
+            <div class="card p-3" id="auditLogCard" style="display: none;">
+                <h5 class="fw-bold mb-3 text-info">📋 历史审计与快照记录</h5>
+                <ul class="list-group list-group-flush" id="auditLogBody">
+                    </ul>
             </div>
 
             <div class="card p-3" id="traceResultCard" style="display: none;">
@@ -92,12 +100,16 @@
         </div>`;
     }
 
-    async function fetchLogs() {
+    // 1. 查询订单通信记录
+    async function fetchMessages() {
         const orderId = document.getElementById("orderIdInput").value.trim();
         if(!orderId) return showAlert("warning", "请先输入订单号！");
 
+        document.getElementById("auditLogCard").style.display = "none";
+        document.getElementById("messageCard").style.display = "block";
+
         try {
-            const res = await fetch(`${BASE_URL}/api/admin/logs?order_id=${orderId}`);
+            const res = await fetch(`${BASE_URL}/admin/messages/${orderId}`);
             const json = await res.json();
             
             const tbody = document.getElementById("logBody");
@@ -105,80 +117,107 @@
             
             if(json.data && json.data.length > 0) {
                 json.data.forEach(log => {
-                    // 只显示 hash 的前后几位，保持页面整洁
-                    const shortHash = log.msg_hash.substring(0, 10) + '...' + log.msg_hash.substring(log.msg_hash.length - 6);
-                    // 格式化时间戳
-                    const timeStr = new Date(parseInt(log.timestamp) * 1000).toLocaleTimeString();
-                    
+                    const shortHash = log.message_hash.substring(0, 8) + '...' + log.message_hash.substring(log.message_hash.length - 6);
+                    const timeStr = new Date(log.timestamp).toLocaleTimeString(); // 处理ISO时间
+                    const roleBadge = log.role === 'user' ? 'bg-primary' : 'bg-warning text-dark';
+
                     tbody.innerHTML += `
                         <tr>
                             <td class="small">${timeStr}</td>
+                            <td><span class="badge ${roleBadge}">${log.role}</span></td>
                             <td><span class="badge bg-secondary">${log.sender_pid.substring(0,8)}...</span></td>
                             <td>${log.content}</td>
-                            <td class="hash-text" title="${log.msg_hash}">${shortHash}</td>
+                            <td class="hash-text" title="${log.message_hash}">${shortHash}</td>
                         </tr>
                     `;
                 });
                 showAlert("success", `成功拉取订单 ${orderId} 的通信记录。`);
             } else {
-                tbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted">该订单暂无通信记录</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">该订单暂无通信记录</td></tr>`;
             }
         } catch (e) {
             showAlert("danger", "获取日志失败，请检查后端服务是否运行。");
         }
     }
 
-    async function sealLogs() {
+    // 2. 生成快照 (Seal)
+    async function sealSnapshot() {
         const orderId = document.getElementById("orderIdInput").value.trim();
         if(!orderId) return showAlert("warning", "请先输入订单号！");
         
         try {
-            const res = await fetch(`${BASE_URL}/api/admin/seal`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ order_id: orderId })
-            });
+            const res = await fetch(`${BASE_URL}/admin/snapshot/${orderId}`, { method: "POST" });
             const json = await res.json();
-            if(json.code === 200) {
-                document.getElementById("auditResult").innerHTML = `<span class="text-success">封存成功！Merkle Root: <br><span class="merkle-root">${json.root}</span></span>`;
+            if(json.success) {
+                const root = json.data.merkle_root || "未知";
+                document.getElementById("auditResult").innerHTML = `<span class="text-success">封存快照成功！Merkle Root: <br><span class="merkle-root">${root}</span></span>`;
+            } else {
+                document.getElementById("auditResult").innerHTML = `<span class="text-danger">封存失败：${json.message}</span>`;
             }
         } catch (e) {
-            showAlert("danger", "封存日志请求失败。");
+            showAlert("danger", "封存请求失败。");
         }
     }
 
-    async function verifyLogs() {
+    // 3. 验证完整性
+    async function verifyOrder() {
         const orderId = document.getElementById("orderIdInput").value.trim();
         if(!orderId) return showAlert("warning", "请先输入订单号！");
         
         try {
-            const res = await fetch(`${BASE_URL}/api/admin/verify`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ order_id: orderId })
-            });
+            const res = await fetch(`${BASE_URL}/admin/verify/${orderId}`, { method: "POST" });
             const json = await res.json();
             const resultDiv = document.getElementById("auditResult");
-            if(json.is_valid) {
-                resultDiv.innerHTML = `<span class="text-success">✅ 验证通过: ${json.msg}</span>`;
+            if(json.success) {
+                resultDiv.innerHTML = `<span class="text-success">✅ 验证通过: ${json.message}</span>`;
             } else {
-                resultDiv.innerHTML = `<span class="text-danger">❌ 警告: ${json.msg}</span>`;
+                resultDiv.innerHTML = `<span class="text-danger">❌ 警告: ${json.message}</span>`;
             }
         } catch (e) {
             showAlert("danger", "验证请求失败。");
         }
     }
 
-    async function traceViolation() {
+    // 4. 查看审计日志 (新功能)
+    async function fetchAuditLogs() {
         const orderId = document.getElementById("orderIdInput").value.trim();
-        const keyword = document.getElementById("keywordInput").value.trim();
-        
-        if(!orderId || !keyword) {
-            return showAlert("warning", "必须提供订单号和违规关键字！");
-        }
+        if(!orderId) return showAlert("warning", "请先输入订单号！");
+
+        document.getElementById("messageCard").style.display = "none";
+        document.getElementById("auditLogCard").style.display = "block";
 
         try {
-            const res = await fetch(`${BASE_URL}/api/admin/trace`, {
+            const res = await fetch(`${BASE_URL}/admin/audit_logs/${orderId}`);
+            const json = await res.json();
+            const ul = document.getElementById("auditLogBody");
+            ul.innerHTML = "";
+
+            if(json.data && json.data.length > 0) {
+                json.data.forEach(log => {
+                    ul.innerHTML += `
+                        <li class="list-group-item">
+                            <strong>[${log.action}]</strong> <span class="text-muted small">${log.created_at}</span><br>
+                            <span class="merkle-root">Root: ${log.merkle_root || 'N/A'}</span>
+                        </li>
+                    `;
+                });
+            } else {
+                ul.innerHTML = `<li class="list-group-item text-muted">暂无审计记录</li>`;
+            }
+        } catch (e) {
+            showAlert("danger", "获取审计日志失败。");
+        }
+    }
+
+    // 5. 条件溯源 
+    async function traceViolation() {
+        const orderId = document.getElementById("orderIdInput").value;
+        const keyword = document.getElementById("keywordInput").value;
+
+        if(!orderId || !keyword) return showAlert("warning", "请输入订单号和违规关键词");
+
+        try {
+            const res = await fetch(`${BASE_URL}/admin/trace`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ order_id: orderId, keyword: keyword })
@@ -190,27 +229,34 @@
             const body = document.getElementById("traceResultBody");
             card.style.display = "block";
 
-            if(data.safe_to_trace) {
-                let usersHtml = data.traced_users.map(u => 
-                    `<li>匿名PID: <span class="badge bg-secondary">${u.pid.substring(0,8)}...</span> ➜ 真实身份: <span class="fw-bold text-danger">${u.real_id}</span></li>`
-                ).join("");
+            if(data && data.safe_to_trace) {
+                // 如果没有溯源出用户列表，给一个明确提示
+                if (!data.traced_users || data.traced_users.length === 0) {
+                    body.innerHTML = `
+                        <div class="alert alert-danger"><strong>${data.message}</strong></div>
+                        <p class="text-muted">⚠ 提示：已匹配违规内容，但该 PID 未在系统中注册（请确保用户已通过 register 接口注册）。</p>
+                    `;
+                    return;
+                }
+
+                // 正常渲染列表
+                let usersHtml = data.traced_users.map(u => {
+                    // 健壮处理 PID 显示
+                    const shortPid = u.pid && u.pid.length > 8 ? u.pid.substring(0,8) + "..." : (u.pid || "N/A");
+                    return `<li>匿名PID: <span class="badge bg-secondary">${shortPid}</span> ➜ 真实身份: <span class="fw-bold text-danger">${u.username}</span></li>`;
+                }).join("");
                 
                 body.innerHTML = `
-                    <div class="alert alert-danger">
-                        <strong>${data.message}</strong>
-                    </div>
+                    <div class="alert alert-danger"><strong>${data.message}</strong></div>
                     <p class="mb-1 fw-bold">已解密违规用户身份：</p>
-                    <ul>${usersHtml}</ul>
+                    <ul class="mb-0">${usersHtml}</ul>
                 `;
             } else {
-                body.innerHTML = `
-                    <div class="alert alert-warning">
-                        <strong>拒绝溯源：</strong> ${data.message}
-                    </div>
-                `;
+                body.innerHTML = `<div class="alert alert-warning"><strong>拒绝溯源：</strong> ${data ? data.message : (json.message || "未知原因")}</div>`;
             }
         } catch (e) {
-            showAlert("danger", "溯源请求失败。");
+            console.error(e);
+            showAlert("danger", "溯源请求失败，请检查网络或后端接口。");
         }
     }
 </script>
