@@ -1,10 +1,12 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, session
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room
 from pathlib import Path
 from datetime import datetime
+from functools import wraps
 import uuid
 import json
+import os
 
 from project.database.db import init_db, execute, query_one, query_all
 from project.crypto.pid import generate_pid
@@ -15,6 +17,8 @@ from project.server.logger import create_merkle_snapshot, verify_order_integrity
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "foodshield-secret-key"
+app.config["ADMIN_USERNAME"] = os.getenv("FOODSHIELD_ADMIN_USERNAME", "admin")
+app.config["ADMIN_PASSWORD"] = os.getenv("FOODSHIELD_ADMIN_PASSWORD", "admin123456")
 
 CORS(app)
 socketio = SocketIO(
@@ -61,6 +65,80 @@ def get_message_history_by_order(order_id: str):
         (order_id,)
     )
     return [dict(row) for row in rows]
+
+def get_user_by_pid(pid: str):
+    return query_one("SELECT * FROM users WHERE pid = ?", (pid,))
+
+
+def get_orders_by_user_id(user_id: int):
+    rows = query_all(
+        """
+        SELECT order_id, status, created_at
+        FROM orders
+        WHERE user_id = ?
+        ORDER BY id DESC
+        """,
+        (user_id,)
+    )
+    return [dict(row) for row in rows]
+
+
+def log_admin_action(action: str, detail: dict, order_id: str = None):
+    execute(
+        """
+        INSERT INTO audit_logs (order_id, action, detail, merkle_root, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            order_id,
+            action,
+            json.dumps(detail, ensure_ascii=False),
+            None,
+            now_iso()
+        )
+    )
+
+
+def admin_required(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not session.get("is_admin"):
+            try:
+                log_admin_action(
+                    action="TRACE_DENIED",
+                    detail={
+                        "path": request.path,
+                        "method": request.method,
+                        "reason": "not_admin"
+                    },
+                    order_id=None
+                )
+            except Exception:
+                pass
+
+            return jsonify({
+                "success": False,
+                "message": "admin permission required"
+            }), 403
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def trace_pid(pid: str):
+    user = get_user_by_pid(pid)
+    if not user:
+        return None
+
+    user_dict = dict(user)
+    orders = get_orders_by_user_id(user_dict["id"])
+
+    return {
+        "user_id": user_dict["id"],
+        "username": user_dict.get("username"),
+        "pid": user_dict.get("pid"),
+        "created_at": user_dict.get("created_at"),
+        "orders": orders
+    }
 
 
 # ====================== 前端页面路由 ======================
@@ -292,8 +370,108 @@ def get_message_history(order_id):
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+@app.route("/admin/login", methods=["POST"])
+def admin_login():
+    try:
+        data = request.json or {}
+        username = str(data.get("username", "")).strip()
+        password = str(data.get("password", "")).strip()
+
+        if not username or not password:
+            return jsonify({
+                "success": False,
+                "message": "username and password are required"
+            }), 400
+
+        if (
+            username != app.config["ADMIN_USERNAME"]
+            or password != app.config["ADMIN_PASSWORD"]
+        ):
+            log_admin_action(
+                action="ADMIN_LOGIN_FAIL",
+                detail={
+                    "username": username,
+                    "reason": "invalid_credentials"
+                },
+                order_id=None
+            )
+            return jsonify({
+                "success": False,
+                "message": "invalid admin credentials"
+            }), 401
+
+        session["is_admin"] = True
+        session["admin_username"] = username
+
+        log_admin_action(
+            action="ADMIN_LOGIN_SUCCESS",
+            detail={
+                "admin_username": username
+            },
+            order_id=None
+        )
+
+        return jsonify({
+            "success": True,
+            "message": "admin login successful",
+            "data": {
+                "is_admin": True,
+                "admin_username": username
+            }
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    try:
+        admin_username = session.get("admin_username")
+
+        if admin_username:
+            log_admin_action(
+                action="ADMIN_LOGOUT",
+                detail={
+                    "admin_username": admin_username
+                },
+                order_id=None
+            )
+
+        session.clear()
+
+        return jsonify({
+            "success": True,
+            "message": "admin logout successful",
+            "data": {
+                "is_admin": False
+            }
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+@app.route("/admin/session", methods=["GET"])
+def admin_session():
+    return jsonify({
+        "success": True,
+        "message": "admin session fetched successfully",
+        "data": {
+            "is_admin": bool(session.get("is_admin")),
+            "admin_username": session.get("admin_username")
+        }
+    }), 200
+
 # ====================== 管理员 API（第四周） ======================
 @app.route("/admin/snapshot/<order_id>", methods=["POST"])
+@admin_required
 def admin_create_snapshot(order_id):
     try:
         order = get_order_by_order_id(order_id)
@@ -319,6 +497,7 @@ def admin_create_snapshot(order_id):
 
 
 @app.route("/admin/messages/<order_id>", methods=["GET"])
+@admin_required
 def admin_get_messages(order_id):
     try:
         order = get_order_by_order_id(order_id)
@@ -343,6 +522,7 @@ def admin_get_messages(order_id):
 
 
 @app.route("/admin/audit_logs/<order_id>", methods=["GET"])
+@admin_required
 def admin_get_audit_logs(order_id):
     try:
         order = get_order_by_order_id(order_id)
@@ -385,6 +565,7 @@ def admin_get_audit_logs(order_id):
 
 
 @app.route("/admin/verify/<order_id>", methods=["POST"])
+@admin_required
 def admin_verify_order(order_id):
     try:
         order = get_order_by_order_id(order_id)
@@ -410,6 +591,7 @@ def admin_verify_order(order_id):
 
 
 @app.route("/admin/orders", methods=["GET"])
+@admin_required
 def admin_get_orders():
     try:
         rows = query_all(
@@ -457,6 +639,65 @@ def admin_get_orders():
             "success": False,
             "message": str(e)
         }), 500
+
+@app.route("/admin/trace", methods=["POST"])
+@admin_required
+def admin_trace():
+    try:
+        data = request.json or {}
+        pid = str(data.get("pid", "")).strip()
+        reason = str(data.get("reason", "")).strip() or "unspecified"
+
+        if not pid:
+            return jsonify({
+                "success": False,
+                "message": "pid is required"
+            }), 400
+
+        result = trace_pid(pid)
+        admin_username = session.get("admin_username", "unknown")
+
+        if not result:
+            log_admin_action(
+                action="TRACE_FAIL",
+                detail={
+                    "pid": pid,
+                    "reason": reason,
+                    "admin_username": admin_username
+                },
+                order_id=None
+            )
+            return jsonify({
+                "success": False,
+                "message": "pid not found"
+            }), 404
+
+        latest_order_id = result["orders"][0]["order_id"] if result["orders"] else None
+
+        log_admin_action(
+            action="TRACE_SUCCESS",
+            detail={
+                "pid": pid,
+                "reason": reason,
+                "admin_username": admin_username,
+                "user_id": result["user_id"],
+                "username": result["username"]
+            },
+            order_id=latest_order_id
+        )
+
+        return jsonify({
+            "success": True,
+            "message": "trace completed successfully",
+            "data": result
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
 
 
 # ====================== WebSocket 事件 ======================
@@ -689,6 +930,7 @@ def handle_send_message(data):
         })
 
 @app.route("/admin/backfill_snapshots", methods=["POST"])
+@admin_required
 def admin_backfill_snapshots():
     try:
         rows = query_all(
